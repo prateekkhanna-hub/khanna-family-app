@@ -6,7 +6,7 @@ from datetime import datetime
 
 # --- CONFIGURATION ---
 # ⚠️ PASTE YOUR GOOGLE SHEET ID HERE ⚠️
-SHEET_ID = "PASTE_YOUR_LONG_ID_HERE" 
+SHEET_ID = "P1U-5zLF4TYhFjW7WsTnKWp0A78qzEtHGRT38lS50LbPM" 
 
 # Family Structure (Roles determine Admin Tab access only)
 FAMILY_MEMBERS = {
