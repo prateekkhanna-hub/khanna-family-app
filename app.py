@@ -5,15 +5,14 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime
 
 # --- CONFIGURATION ---
-# ⚠️ MAKE SURE YOUR GOOGLE SHEET FILE IS NAMED EXACTLY THIS ⚠️
 SHEET_NAME = "Khanna Family App DB"
 
-# Family Structure
+# Family Structure & Security (Updated PINs)
 FAMILY_MEMBERS = {
-    "Prateek": {"role": "admin"},
-    "Dipti":   {"role": "admin"},
-    "Raghav":  {"role": "member"},
-    "Rhea":    {"role": "member"}
+    "Prateek": {"role": "admin", "pin": "0123"},
+    "Dipti":   {"role": "admin", "pin": "0123"},
+    "Raghav":  {"role": "member", "pin": "5544"},
+    "Rhea":    {"role": "member", "pin": "3322"}
 }
 
 # --- GOOGLE SHEETS CONNECTION ---
@@ -28,7 +27,6 @@ def get_connection():
         st.stop()
         
     client = gspread.authorize(creds)
-    # SWITCHED BACK TO OPEN BY NAME
     return client.open(SHEET_NAME)
 
 # --- DATA FUNCTIONS ---
@@ -77,16 +75,43 @@ def main():
         </style>
         """, unsafe_allow_html=True)
 
+    # --- SESSION STATE (Login System) ---
+    if 'current_user' not in st.session_state:
+        st.session_state.current_user = None
+
+    # --- LOGIN SCREEN ---
+    if st.session_state.current_user is None:
+        st.title("🔒 Family Login")
+        
+        selected_user = st.selectbox("Who are you?", list(FAMILY_MEMBERS.keys()))
+        pin_input = st.text_input("Enter PIN", type="password")
+        
+        if st.button("Login"):
+            correct_pin = FAMILY_MEMBERS[selected_user]['pin']
+            if pin_input == correct_pin:
+                st.session_state.current_user = selected_user
+                st.rerun()
+            else:
+                st.error("❌ Wrong PIN! Try again.")
+        
+        st.stop() 
+
+    # --- MAIN APP ---
+    user = st.session_state.current_user
+    role = FAMILY_MEMBERS[user]["role"]
+
     try:
         data = load_data()
     except Exception as e:
         st.error(f"Connection Error: {e}")
         st.stop()
 
-    st.sidebar.title("👤 Login")
-    user = st.sidebar.selectbox("Who is this?", list(FAMILY_MEMBERS.keys()))
-    role = FAMILY_MEMBERS[user]["role"]
-    
+    # Sidebar Logout
+    st.sidebar.title(f"👤 {user}")
+    if st.sidebar.button("Logout"):
+        st.session_state.current_user = None
+        st.rerun()
+
     st.title(f"👋 Hi, {user}!")
     
     # --- DASHBOARD ---
