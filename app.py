@@ -133,7 +133,51 @@ def main():
                     "assignee": "Any", "frequency": "One-time", "status": "Pending Approval"
                 })
                 st.success("Submitted for approval!")
+    # --- TAB 2: REWARDS ---
+    with tab2:
+        st.subheader("Rewards Catalog")
+        active_rewards = [r for r in data['rewards'] if r['Status'] == "Approved"]
+        
+        if not active_rewards:
+            st.info("No rewards available yet.")
+            
+        for reward in active_rewards:
+            with st.container(border=True):
+                c1, c2 = st.columns([3, 1])
+                c1.write(f"**{reward['Title']}**")
+                c1.caption(f"Cost: {reward['Cost']} pts")
+                
+                # Check if user can afford it
+                user_balance = data['balances'].get(user, 0)
+                can_afford = user_balance >= reward['Cost']
+                
+                if c2.button("Redeem", key=f"red_{reward['ID']}", disabled=not can_afford):
+                    # Deduct points
+                    new_balance = user_balance - reward['Cost']
+                    update_balance(user, new_balance)
+                    
+                    # Log it
+                    log_history(user, "Redeemed Reward", reward['Title'], f"-{reward['Cost']}")
+                    
+                    st.balloons()
+                    st.success("Redeemed! Enjoy.")
+                    st.rerun()
 
+        st.divider()
+        with st.expander("➕ Wishlist (Suggest Reward)"):
+             wish_item = st.text_input("I want...")
+             wish_cost = st.number_input("Fair Cost?", min_value=10, step=10)
+             if st.button("Add to Wishlist"):
+                 # Use a simple way to generate a new ID (count existing + 200)
+                 new_id = len(data['rewards']) + 200 
+                 
+                 # Connect to sheet and add row
+                 sh = get_connection()
+                 ws = sh.worksheet("Rewards")
+                 ws.append_row([new_id, wish_item, wish_cost, "Pending Approval"])
+                 
+                 st.success("Added to wishlist for approval!")
+                 
     with tab3:
         if role == "admin":
             st.write("### 🛡️ Admin Dashboard")
