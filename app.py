@@ -5,10 +5,10 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime
 
 # --- CONFIGURATION ---
-# ⚠️ PASTE YOUR GOOGLE SHEET ID HERE ⚠️
-SHEET_ID = "P1U-5zLF4TYhFjW7WsTnKWp0A78qzEtHGRT38lS50LbPM" 
+# ⚠️ MAKE SURE YOUR GOOGLE SHEET FILE IS NAMED EXACTLY THIS ⚠️
+SHEET_NAME = "Khanna Family App DB"
 
-# Family Structure (Roles determine Admin Tab access only)
+# Family Structure
 FAMILY_MEMBERS = {
     "Prateek": {"role": "admin"},
     "Dipti":   {"role": "admin"},
@@ -28,7 +28,8 @@ def get_connection():
         st.stop()
         
     client = gspread.authorize(creds)
-    return client.open_by_key(SHEET_ID)
+    # SWITCHED BACK TO OPEN BY NAME
+    return client.open(SHEET_NAME)
 
 # --- DATA FUNCTIONS ---
 def load_data():
@@ -70,7 +71,6 @@ def update_task_status(task_id, new_status):
 def main():
     st.set_page_config(page_title="Khanna Family Tasks", page_icon="🏠")
     
-    # CSS for mobile-friendly buttons
     st.markdown("""
         <style>
         .stButton>button {width: 100%; border-radius: 12px; height: 3.5em;}
@@ -83,33 +83,27 @@ def main():
         st.error(f"Connection Error: {e}")
         st.stop()
 
-    # --- SIDEBAR LOGIN ---
     st.sidebar.title("👤 Login")
     user = st.sidebar.selectbox("Who is this?", list(FAMILY_MEMBERS.keys()))
     role = FAMILY_MEMBERS[user]["role"]
     
     st.title(f"👋 Hi, {user}!")
     
-    # --- UNIFIED DASHBOARD (Everyone sees their points + Standings) ---
-    # 1. Show MY Points big and bold
+    # --- DASHBOARD ---
     my_points = data['balances'].get(user, 0)
     st.metric(label="💰 My Points Balance", value=my_points)
 
-    # 2. Show Family Leaderboard (Small toggle)
     with st.expander("🏆 View Family Leaderboard"):
         cols = st.columns(len(FAMILY_MEMBERS))
         for idx, member in enumerate(FAMILY_MEMBERS):
-            # Highlight the current user with a star
             label = f"⭐ {member}" if member == user else member
             cols[idx].metric(label, data['balances'].get(member, 0))
 
-    # --- MAIN TABS ---
     tab1, tab2, tab3 = st.tabs(["📝 Tasks", "🎁 Rewards", "⚙️ Admin"])
 
-    # --- TAB 1: TASKS (Available to Everyone) ---
+    # --- TAB 1: TASKS ---
     with tab1:
         st.subheader("Available Tasks")
-        # Filter: Show Active tasks that are assigned to 'Any' OR specifically to me
         active_tasks = [t for t in data['tasks'] if t['Status'] == "Active" and (t['Assignee'] == "Any" or t['Assignee'] == user)]
         
         if not active_tasks:
@@ -122,17 +116,11 @@ def main():
                 c1.caption(f"{task['Points']} pts • {task['Frequency']}")
                 
                 if c2.button("Done", key=f"done_{task['ID']}"):
-                    # Update Balance
                     new_pts = my_points + task['Points']
                     update_balance(user, new_pts)
-                    
-                    # Log History
                     log_history(user, "Completed Task", task['Title'], f"+{task['Points']}")
-                    
-                    # Handle One-time vs Recurring
                     if task['Frequency'] == "One-time":
                         update_task_status(task['ID'], "Completed")
-                    
                     st.toast(f"Boom! +{task['Points']} points!")
                     st.rerun()
 
@@ -148,7 +136,7 @@ def main():
                 })
                 st.success("Submitted for approval!")
 
-    # --- TAB 2: REWARDS (Available to Everyone) ---
+    # --- TAB 2: REWARDS ---
     with tab2:
         st.subheader("Rewards Catalog")
         active_rewards = [r for r in data['rewards'] if r['Status'] == "Approved"]
@@ -183,21 +171,18 @@ def main():
                  ws.append_row([new_id, wish_item, wish_cost, "Pending Approval"])
                  st.success("Added to wishlist for approval!")
 
-    # --- TAB 3: ADMIN (Prateek & Dipti Only) ---
+    # --- TAB 3: ADMIN ---
     with tab3:
         if role != "admin":
             st.warning("🔒 Parents Only Area")
         else:
             st.write("### 🛡️ Admin Dashboard")
-            
-            # Pending Approvals
             pending_tasks = [t for t in data['tasks'] if t['Status'] == "Pending Approval"]
             pending_rewards = [r for r in data['rewards'] if r['Status'] == "Pending Approval"]
 
             if not pending_tasks and not pending_rewards:
                 st.info("No pending approvals.")
             
-            # Review Tasks
             if pending_tasks:
                 st.write("#### 🆕 Task Requests")
                 for t in pending_tasks:
@@ -211,14 +196,11 @@ def main():
                             update_task_status(t['ID'], "Rejected")
                             st.rerun()
 
-            # Review Rewards
             if pending_rewards:
                 st.divider()
                 st.write("#### 🆕 Reward Requests")
                 for r in pending_rewards:
-                     # Note: We need a helper to update rewards, doing inline for simplicity
                     st.write(f"**{r['Title']}** ({r['Cost']} pts)")
-                    # (Simple approve logic: Update Status column in Sheet manually or via future code)
                     st.caption("⚠️ Go to Google Sheet to approve new reward ideas for now.")
 
             st.divider()
