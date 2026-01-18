@@ -95,8 +95,21 @@ def main():
     
     cookie_user = cookie_manager.get("active_user")
 
-    # If NO cookie, show Login Screen
-    if not cookie_user or cookie_user not in data['users']:
+    # ---------------------------------------------------------
+    # THE FIX: Check BOTH Cookie AND Session State
+    # ---------------------------------------------------------
+    # We check if (1) The cookie is set OR (2) The user just logged in this session
+    is_authenticated = False
+    
+    if cookie_user and cookie_user in data['users']:
+        is_authenticated = True
+        user = cookie_user
+    elif st.session_state.get('authenticated'):
+        is_authenticated = True
+        user = st.session_state.get('user')
+
+    # If NOT authenticated by either method, show login
+    if not is_authenticated:
         st.title("🔒 Login")
         valid_users = list(data['users'].keys())
         if not valid_users:
@@ -109,9 +122,14 @@ def main():
         if st.button("Login"):
             correct_pin = str(data['users'][user_select]['pin'])
             if pin_input == correct_pin:
-                # FIX: Use datetime object instead of timestamp float
+                # 1. Update Session State (Instant access)
+                st.session_state['authenticated'] = True
+                st.session_state['user'] = user_select
+                
+                # 2. Update Cookie (For next refresh)
                 expire_date = datetime.now() + timedelta(days=30)
                 cookie_manager.set("active_user", user_select, expires_at=expire_date)
+                
                 st.success("Logged in!")
                 time.sleep(0.5)
                 st.rerun()
@@ -119,8 +137,7 @@ def main():
                 st.error("Wrong PIN!")
         return
 
-    # If cookie exists, load user
-    user = cookie_user
+    # If we get here, the user is logged in
     role = data['users'][user]['role']
 
     # Sidebar Logout
@@ -128,6 +145,7 @@ def main():
     st.sidebar.write(f"Logged in as: **{user}**")
     if st.sidebar.button("Logout"):
         cookie_manager.delete("active_user")
+        st.session_state['authenticated'] = False # Clear session too
         st.rerun()
     
     st.title(f"👋 Hi, {user}!")
