@@ -181,17 +181,47 @@ def get_login_manager():
 def main():
     st.set_page_config(page_title="Khanna Family Quest", page_icon="🛡️", layout="centered")
     
+    # ---------------- COMPACT CSS ----------------
     st.markdown("""
         <style>
-        div.stButton > button[kind="primary"] {
-            background-color: #28a745; color: white; font-weight: bold; height: 3em; width: 100%; border-radius: 12px;
+        /* COMPACT BUTTONS */
+        div.stButton > button {
+            width: 100%;
+            border-radius: 8px;
+            font-weight: bold;
+            height: 2.5em !important; 
+            padding: 0px 10px;
         }
-        div.stButton > button[kind="secondary"] { height: 3em; width: 100%; border-radius: 12px; }
+        div.stButton > button[kind="primary"] {
+            background-color: #28a745; color: white;
+        }
+        
+        /* STAT STRIP */
+        .stat-strip {
+            display: flex;
+            justify-content: space-between;
+            background-color: #262730;
+            border: 1px solid #464b59;
+            border-radius: 10px;
+            padding: 10px 15px;
+            margin-bottom: 15px;
+            align-items: center;
+        }
+        .stat-item { text-align: center; flex: 1; }
+        .stat-icon { font-size: 1.2rem; margin-bottom: 2px; display: block; }
+        .stat-value { font-weight: bold; font-size: 1.1rem; margin: 0; color: white; }
+        .stat-label { font-size: 0.75rem; color: #aaa; margin: 0; }
+        
+        /* HALL OF FAME CARDS */
         .stat-card {
-            background-color: #262730; border: 1px solid #464b59; border-radius: 10px; padding: 15px; text-align: center; margin-bottom: 10px;
+            background-color: #262730; border: 1px solid #464b59; border-radius: 10px; padding: 10px; margin-bottom: 8px;
         }
         .active-card { border: 2px solid #ff4b4b; background-color: #362022; }
+
+        /* TIGHT HEADERS */
+        h3 { margin-top: -20px !important; padding-top: 0px !important; margin-bottom: 5px !important; }
         .stProgress > div > div > div > div { background-color: #00d4ff; }
+        .block-container { padding-top: 2rem !important; padding-bottom: 5rem !important; }
         </style>
         """, unsafe_allow_html=True)
 
@@ -230,41 +260,63 @@ def main():
             else: st.error("Wrong PIN!")
         return
 
+    # --- MAIN DASHBOARD (COMPACT) ---
     user = st.session_state['user']
     user_data = data['users'][user]
-    role = user_data['role'] # This is now safely 'admin' or 'kid'
+    role = user_data['role']
     
     level, title = calculate_level(user_data['xp'])
+    
     prev_threshold = ((level - 1) * 2) ** 2 if level > 1 else 0
     next_threshold = (level * 2) ** 2
     if next_threshold <= prev_threshold: next_threshold = prev_threshold + 10
-    xp_progress = max(0.0, min(1.0, (user_data['xp'] - prev_threshold) / (next_threshold - prev_threshold)))
+    xp_percent = max(0.0, min(1.0, (user_data['xp'] - prev_threshold) / (next_threshold - prev_threshold)))
 
-    c1, c2 = st.columns([3, 1])
-    c1.title(f"{user}")
-    c1.caption(f"**{title}** (Lvl {level})")
-    if c2.button("Logout"):
-        cookie_manager.delete("active_user")
-        st.session_state['authenticated'] = False; st.session_state['user'] = None; st.rerun()
+    # HEADER
+    top_c1, top_c2 = st.columns([3, 1])
+    with top_c1:
+        st.markdown(f"### {user} <span style='font-size:0.9rem; color:#aaa; font-weight:normal'>({title})</span>", unsafe_allow_html=True)
+    with top_c2:
+        if st.button("🚪 Logout"):
+            cookie_manager.delete("active_user")
+            st.session_state['authenticated'] = False; st.session_state['user'] = None; st.rerun()
+            
+    # STAT STRIP
+    st.markdown(f"""
+    <div class="stat-strip">
+        <div class="stat-item" style="border-right: 1px solid #444;">
+            <span class="stat-icon">💰</span>
+            <p class="stat-value">{user_data['points']:g}</p>
+            <p class="stat-label">Gold</p>
+        </div>
+        <div class="stat-item" style="border-right: 1px solid #444;">
+            <span class="stat-icon">🔥</span>
+            <p class="stat-value">{user_data['streak']}</p>
+            <p class="stat-label">Days</p>
+        </div>
+        <div class="stat-item">
+            <span class="stat-icon">⚔️</span>
+            <p class="stat-value">{level}</p>
+            <p class="stat-label">Level</p>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
     
-    st.write(f"**XP Progress:** {int(user_data['xp'])} / {int(next_threshold)}")
-    st.progress(xp_progress)
-    k1, k2 = st.columns(2)
-    k1.metric("💰 Gold", f"{user_data['points']:g}")
-    k2.metric("🔥 Streak", f"{user_data['streak']} Days")
-    
-    st.divider()
-    # LOAD GLOBAL GOAL FROM SETTINGS
+    # XP & FAMILY GOAL (Collapsible)
     g_current = data['settings'].get('Family_Goal_Current', 0)
     g_target = data['settings'].get('Family_Goal_Target', GLOBAL_GOAL_TARGET_DEFAULT)
     g_title = data['settings'].get('Family_Goal_Title', GLOBAL_GOAL_TITLE_DEFAULT)
-    
-    st.write(f"### 🌍 Family Goal: {g_title}")
-    st.progress(min(g_current / g_target, 1.0))
-    st.caption(f"{int(g_current)} / {int(g_target)} pts")
+    g_percent = min(g_current / g_target, 1.0)
 
-    st.divider()
-    tab1, tab2, tab3, tab4 = st.tabs(["⚔️ Quests", "🎁 Loot", "🏆 Hall of Fame", "⚙️ Admin"])
+    with st.expander(f"🌍 Goal: {g_title} ({int(g_percent*100)}%)", expanded=False):
+        st.write(f"**Family Progress:** {int(g_current)} / {int(g_target)}")
+        st.progress(g_percent)
+        st.divider()
+        st.write(f"**Your XP Progress:** {int(user_data['xp'])} / {int(next_threshold)}")
+        st.progress(xp_percent)
+
+    # --- TABS ---
+    tab1, tab2, tab3, tab4 = st.tabs(["⚔️ Quests", "🎁 Loot", "🏆 Fame", "⚙️ Admin"])
 
     with tab1:
         st.subheader("Active Quests")
@@ -326,16 +378,13 @@ def main():
             </div></div>""", unsafe_allow_html=True)
 
     with tab4:
-        # UPDATED ADMIN CHECK: Case-insensitive
         if role == "admin": 
             st.write("### 🛡️ Admin Controls")
             
-            # --- NEW: FAMILY GOAL SETTINGS ---
+            # FAMILY GOAL SETTINGS
             with st.container(border=True):
                 st.write("#### 🌍 Family Goal Settings")
                 c_goal, c_target, c_save = st.columns([2, 1, 1])
-                
-                # Fetch current values to populate inputs
                 current_title = data['settings'].get('Family_Goal_Title', GLOBAL_GOAL_TITLE_DEFAULT)
                 current_target = data['settings'].get('Family_Goal_Target', GLOBAL_GOAL_TARGET_DEFAULT)
                 
@@ -345,12 +394,11 @@ def main():
                 if c_save.button("Update Goal"):
                     update_setting("Family_Goal_Title", new_title)
                     update_setting("Family_Goal_Target", new_target)
-                    st.success("Goal Updated!")
-                    time.sleep(1); st.rerun()
+                    st.success("Goal Updated!"); time.sleep(1); st.rerun()
 
             st.divider()
             
-            # PENDING APPROVALS
+            # PENDING
             p_tasks = [t for t in data['tasks'] if t['Status'] == "Pending Approval"]
             p_rewards = [r for r in data['rewards'] if r['Status'] == "Pending Approval"]
             
