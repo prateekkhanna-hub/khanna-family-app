@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 import extra_streamlit_components as stx
 
@@ -75,7 +75,6 @@ def update_status(sheet_name, item_id, new_status, status_col_index):
 
 # --- LOGIN MANAGER ---
 def get_login_manager():
-    # This creates a cookie manager that persists across refreshes
     return stx.CookieManager()
 
 # --- MAIN APP ---
@@ -92,10 +91,8 @@ def main():
 
     # --- COOKIE LOGIC ---
     cookie_manager = get_login_manager()
-    # Wait for the cookie manager to load (it needs a moment)
     time.sleep(0.1)
     
-    # Check if a cookie already exists
     cookie_user = cookie_manager.get("active_user")
 
     # If NO cookie, show Login Screen
@@ -112,8 +109,9 @@ def main():
         if st.button("Login"):
             correct_pin = str(data['users'][user_select]['pin'])
             if pin_input == correct_pin:
-                # SAVE COOKIE (Expires in 30 days)
-                cookie_manager.set("active_user", user_select, expires_at=datetime.now().timestamp() + 2592000)
+                # FIX: Use datetime object instead of timestamp float
+                expire_date = datetime.now() + timedelta(days=30)
+                cookie_manager.set("active_user", user_select, expires_at=expire_date)
                 st.success("Logged in!")
                 time.sleep(0.5)
                 st.rerun()
@@ -121,7 +119,7 @@ def main():
                 st.error("Wrong PIN!")
         return
 
-    # If cookie exists, skip login and load user
+    # If cookie exists, load user
     user = cookie_user
     role = data['users'][user]['role']
 
