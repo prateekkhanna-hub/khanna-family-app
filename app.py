@@ -176,7 +176,7 @@ def main():
                 st.balloons()
                 st.toast(f"Welcome, {user_select}!", icon="👋")
                 
-                time.sleep(1) # Slight pause to enjoy the balloons
+                time.sleep(1) 
                 st.rerun()
             else:
                 st.error("Wrong PIN!")
@@ -256,11 +256,17 @@ def main():
         with st.expander("➕ Suggest New Task"):
             with st.form("new_task_form"):
                 t_title = st.text_input("Task Name")
-                t_pts = st.number_input("Points", min_value=1.0, value=5.0, step=0.25, format="%.2f")
+                # --- UPDATE: Set Default to 0.0 to force user input ---
+                t_pts = st.number_input("Points", min_value=0.0, value=0.0, step=0.25, format="%.2f")
+                
                 if st.form_submit_button("Submit Task"):
-                    new_id = len(data['tasks']) + 101
-                    add_entry("Tasks", [new_id, t_title, t_pts, "Any", "One-time", "Pending Approval"])
-                    st.success("Task sent for approval!")
+                    # --- VALIDATION: Prevent submitting if points are 0 ---
+                    if t_pts > 0:
+                        new_id = len(data['tasks']) + 101
+                        add_entry("Tasks", [new_id, t_title, t_pts, "Any", "One-time", "Pending Approval"])
+                        st.success("Task sent for approval!")
+                    else:
+                        st.error("⚠️ Please enter a point value (greater than 0).")
 
     # --- TAB 2: REWARDS ---
     with tab2:
@@ -286,11 +292,17 @@ def main():
         with st.expander("➕ Suggest New Reward"):
             with st.form("new_reward_form"):
                 r_title = st.text_input("Reward Name")
-                r_cost = st.number_input("Cost", min_value=1.0, value=50.0, step=0.25, format="%.2f")
+                # --- UPDATE: Set Default to 0.0 ---
+                r_cost = st.number_input("Cost", min_value=0.0, value=0.0, step=0.25, format="%.2f")
+                
                 if st.form_submit_button("Submit Reward Request"):
-                    new_id = len(data['rewards']) + 201
-                    add_entry("Rewards", [new_id, r_title, r_cost, "Pending Approval"])
-                    st.success(f"Reward '{r_title}' sent for approval!")
+                    # --- VALIDATION: Prevent submitting if cost is 0 ---
+                    if r_cost > 0:
+                        new_id = len(data['rewards']) + 201
+                        add_entry("Rewards", [new_id, r_title, r_cost, "Pending Approval"])
+                        st.success(f"Reward '{r_title}' sent for approval!")
+                    else:
+                        st.error("⚠️ Please enter a cost value (greater than 0).")
 
     # --- TAB 3: ADMIN ---
     with tab3:
