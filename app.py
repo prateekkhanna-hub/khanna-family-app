@@ -82,11 +82,10 @@ def main():
     st.set_page_config(page_title="Khanna Family Tasks", page_icon="🏠")
     
     # -------------------------------------------------------------------------
-    # CUSTOM CSS: Green Buttons & Stat Cards
+    # CUSTOM CSS
     # -------------------------------------------------------------------------
     st.markdown("""
         <style>
-        /* Make all PRIMARY buttons GREEN */
         div.stButton > button[kind="primary"] {
             background-color: #28a745;
             border-color: #28a745;
@@ -96,14 +95,11 @@ def main():
             width: 100%;
             border-radius: 12px;
         }
-        /* Make standard buttons standard height */
         div.stButton > button[kind="secondary"] {
             height: 3.5em;
             width: 100%;
             border-radius: 12px;
         }
-
-        /* Stat Card Styling */
         .stat-container {
             display: flex;
             flex-wrap: wrap;
@@ -162,7 +158,6 @@ def main():
         user_select = st.selectbox("Who are you?", valid_users)
         pin_input = st.text_input("Enter PIN", type="password")
         
-        # Use primary=True to make it green
         if st.button("Login", type="primary"):
             correct_pin = str(data['users'][user_select]['pin'])
             if pin_input == correct_pin:
@@ -221,20 +216,18 @@ def main():
         
         for task in active_tasks:
             with st.container(border=True):
-                # Columns: Checkbox (Small) | Text (Wide) | Button (Medium)
                 c_check, c_text, c_btn = st.columns([0.5, 3, 1.2])
                 
-                # 1. THE CHECKBOX (Left)
-                is_checked = c_check.checkbox("", key=f"chk_{task['ID']}")
+                # Checkbox Key
+                chk_key = f"chk_{task['ID']}"
+                is_checked = c_check.checkbox("", key=chk_key)
                 
-                # 2. THE TEXT (Middle)
                 c_text.write(f"**{task['Title']}**")
                 c_text.caption(f"{float(task['Points']):g} pts • {task['Frequency']}")
                 
-                # 3. THE BUTTON (Right) - Type="primary" makes it GREEN via CSS
                 btn_clicked = c_btn.button("Done", key=f"btn_{task['ID']}", type="primary")
                 
-                # LOGIC: If Checkbox OR Button is triggered
+                # LOGIC
                 if is_checked or btn_clicked:
                     current_pts = data['users'][user]['points']
                     task_pts = float(task['Points'])
@@ -246,9 +239,14 @@ def main():
                     if task['Frequency'] == "One-time":
                         update_status("Tasks", task['ID'], "Completed", 6)
                     
-                    st.balloons()  # <--- CELEBRATION!
+                    # --- CRITICAL FIX: FORCE UNCHECK ---
+                    # This prevents the loop where it keeps adding points
+                    if chk_key in st.session_state:
+                        st.session_state[chk_key] = False
+                    
+                    st.balloons()
                     st.toast(f"Nice job! +{task_pts:g} Points")
-                    time.sleep(1) # Wait for visual before reload
+                    time.sleep(1)
                     st.rerun()
 
         st.divider()
@@ -278,7 +276,7 @@ def main():
                     new_pts = user_balance - cost
                     update_points(user, new_pts)
                     log_history(user, "Redeemed Reward", reward['Title'], f"-{cost:g}")
-                    st.balloons() # <--- CELEBRATION!
+                    st.balloons()
                     st.toast("Reward Redeemed!")
                     st.rerun()
         st.divider()
