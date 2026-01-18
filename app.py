@@ -73,6 +73,13 @@ def update_status(sheet_name, item_id, new_status, status_col_index):
     cell = ws.find(str(item_id), in_column=1)
     ws.update_cell(cell.row, status_col_index, new_status)
 
+# --- NEW: DELETE FUNCTION ---
+def delete_entry(sheet_name, item_id):
+    sh = get_connection()
+    ws = sh.worksheet(sheet_name)
+    cell = ws.find(str(item_id), in_column=1)
+    ws.delete_rows(cell.row)
+
 # --- LOGIN MANAGER ---
 def get_login_manager():
     return stx.CookieManager()
@@ -282,7 +289,8 @@ def main():
                 
                 if st.form_submit_button("Submit Task"):
                     if t_pts > 0:
-                        new_id = len(data['tasks']) + 101
+                        # --- FIX: USE TIMESTAMP FOR UNIQUE ID ---
+                        new_id = int(datetime.now().timestamp())
                         add_entry("Tasks", [new_id, t_title, t_pts, assignee_str, "One-time", "Pending Approval"])
                         st.success("Task sent for approval!")
                     else:
@@ -316,7 +324,8 @@ def main():
                 
                 if st.form_submit_button("Submit Reward Request"):
                     if r_cost > 0:
-                        new_id = len(data['rewards']) + 201
+                        # --- FIX: USE TIMESTAMP FOR UNIQUE ID ---
+                        new_id = int(datetime.now().timestamp())
                         add_entry("Rewards", [new_id, r_title, r_cost, "Pending Approval"])
                         st.success(f"Reward '{r_title}' sent for approval!")
                     else:
@@ -334,34 +343,48 @@ def main():
                 for t in p_tasks:
                     with st.container(border=True):
                         st.write(f"Task: {t['Title']} (for {t['Assignee']}) — {float(t['Points']):g} pts")
-                        c1, c2 = st.columns(2)
+                        c1, c2, c3 = st.columns(3)
                         if c1.button("Approve", key=f"app_t_{t['ID']}"):
                             update_status("Tasks", t['ID'], "Active", 6)
                             st.toast("Approved!")
-                            time.sleep(1.5) # Wait for Google to save
+                            time.sleep(1.5) 
                             st.rerun()
                         if c2.button("Reject", key=f"rej_t_{t['ID']}"):
                             update_status("Tasks", t['ID'], "Rejected", 6)
                             st.toast("Rejected!")
-                            time.sleep(1.5) # Wait for Google to save
+                            time.sleep(1.5) 
                             st.rerun()
+                        # --- NEW DELETE BUTTON ---
+                        if c3.button("🗑️ Delete", key=f"del_t_{t['ID']}"):
+                            delete_entry("Tasks", t['ID'])
+                            st.toast("Deleted!")
+                            time.sleep(1.5)
+                            st.rerun()
+
             if p_rewards:
                 st.divider()
                 st.write(f"**Rewards Pending ({len(p_rewards)})**")
                 for r in p_rewards:
                     with st.container(border=True):
                         st.write(f"Reward: {r['Title']} ({float(r['Cost']):g} pts)")
-                        c1, c2 = st.columns(2)
+                        c1, c2, c3 = st.columns(3)
                         if c1.button("Approve", key=f"app_r_{r['ID']}"):
                             update_status("Rewards", r['ID'], "Approved", 4)
                             st.toast("Approved!")
-                            time.sleep(1.5) # Wait for Google to save
+                            time.sleep(1.5)
                             st.rerun()
                         if c2.button("Reject", key=f"rej_r_{r['ID']}"):
                             update_status("Rewards", r['ID'], "Rejected", 4)
                             st.toast("Rejected!")
-                            time.sleep(1.5) # Wait for Google to save
+                            time.sleep(1.5)
                             st.rerun()
+                        # --- NEW DELETE BUTTON ---
+                        if c3.button("🗑️ Delete", key=f"del_r_{r['ID']}"):
+                            delete_entry("Rewards", r['ID'])
+                            st.toast("Deleted!")
+                            time.sleep(1.5)
+                            st.rerun()
+
             if not p_tasks and not p_rewards:
                 st.info("No pending approvals.")
             st.divider()
