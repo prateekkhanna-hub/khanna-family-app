@@ -23,7 +23,7 @@ def get_connection():
         creds_dict = dict(st.secrets["gcp_service_account"])
         creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
     except:
-        # Fallback for local testing (credentials.json)
+        # Fallback for local testing
         creds = Credentials.from_service_account_file("credentials.json", scopes=scope)
     
     client = gspread.authorize(creds)
@@ -73,10 +73,11 @@ def update_task_status(task_id, new_status):
 def main():
     st.set_page_config(page_title="Khanna Family Tasks", page_icon="🏠")
     
-    # CSS to make buttons easier to tap on mobile
+    # CSS for Mobile Feel (Bigger buttons)
     st.markdown("""
         <style>
         .stButton>button {width: 100%; border-radius: 12px; height: 3.5em;}
+        div[data-testid="stMetricValue"] {font-size: 1.8rem;}
         </style>
         """, unsafe_allow_html=True)
 
@@ -93,18 +94,20 @@ def main():
     
     st.title(f"👋 Hi, {user}!")
     
-    # Points Dashboard
-    if role == "member":
-        # Format as float to show decimals (e.g. 10.25)
-        st.metric(label="Your Points", value=f"{data['balances'].get(user, 0):.2f}")
-    else:
-        st.write("### 🏆 Standings")
-        cols = st.columns(len(FAMILY_MEMBERS))
-        for idx, member in enumerate(FAMILY_MEMBERS):
-            if FAMILY_MEMBERS[member]['role'] == "member":
-                # Show decimals in standings
-                cols[idx].metric(member, f"{data['balances'].get(member, 0):.2f}")
+    # --- DASHBOARD (Visible to Everyone) ---
+    st.write("### 🏆 Family Leaderboard")
+    
+    # Create columns for every family member to show scores side-by-side
+    cols = st.columns(len(FAMILY_MEMBERS))
+    for idx, (member_name, details) in enumerate(FAMILY_MEMBERS.items()):
+        # Highlight the current user's score
+        score = float(data['balances'].get(member_name, 0))
+        label = f"⭐ {member_name}" if member_name == user else member_name
+        cols[idx].metric(label, f"{score:g}")
 
+    st.divider()
+
+    # --- TABS ---
     tab1, tab2, tab3 = st.tabs(["📝 Tasks", "🎁 Rewards", "⚙️ Admin"])
 
     # --- TAB 1: TASKS ---
@@ -119,7 +122,6 @@ def main():
             with st.container(border=True):
                 c1, c2 = st.columns([3, 1])
                 c1.write(f"**{task['Title']}**")
-                # Show points with decimals if needed
                 c1.caption(f"{float(task['Points']):g} pts • {task['Frequency']}")
                 
                 if c2.button("Done", key=f"done_{task['ID']}"):
@@ -133,15 +135,13 @@ def main():
                     if task['Frequency'] == "One-time":
                         update_task_status(task['ID'], "Completed")
                     
-                    st.toast(f"+{task_pts:g} Points Added!")
+                    st.toast(f"Great job! +{task_pts:g} Points")
                     st.rerun()
 
         st.divider()
         with st.expander("➕ Suggest New Task"):
             new_title = st.text_input("Task Name")
-            
-            # --- UPDATED: Min 1.0, Step 0.25 ---
-            # using 1.0 ensures Python treats it as a float (decimal)
+            # Min 1.0, Step 0.25 as requested
             new_pts = st.number_input("Points", min_value=1.0, value=5.0, step=0.25, format="%.2f")
             
             if st.button("Submit Task"):
@@ -166,6 +166,7 @@ def main():
                 user_balance = float(data['balances'].get(user, 0))
                 cost = float(reward['Cost'])
                 
+                # Disable button if not enough points
                 if c2.button("Redeem", key=f"redeem_{reward['ID']}", disabled=user_balance < cost):
                     new_pts = user_balance - cost
                     update_balance(user, new_pts)
@@ -201,7 +202,10 @@ def main():
             st.write("### 📜 Recent History")
             df = pd.DataFrame(data['history'])
             if not df.empty:
-                st.dataframe(df.tail(10), use_container_width=True, hide_index=True)
+                # Show most recent at top
+                st.dataframe(df.tail(15).iloc[::-1], use_container_width=True, hide_index=True)
+        else:
+            st.info("Parental controls are locked.")
 
 if __name__ == "__main__":
     main()
