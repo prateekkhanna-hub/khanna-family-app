@@ -86,6 +86,7 @@ def main():
     # -------------------------------------------------------------------------
     st.markdown("""
         <style>
+        /* GREEN DONE BUTTONS */
         div.stButton > button[kind="primary"] {
             background-color: #28a745;
             border-color: #28a745;
@@ -94,12 +95,15 @@ def main():
             height: 3.5em;
             width: 100%;
             border-radius: 12px;
+            font-size: 16px;
         }
         div.stButton > button[kind="secondary"] {
             height: 3.5em;
             width: 100%;
             border-radius: 12px;
         }
+
+        /* STAT CARDS */
         .stat-container {
             display: flex;
             flex-wrap: wrap;
@@ -163,10 +167,16 @@ def main():
             if pin_input == correct_pin:
                 st.session_state['authenticated'] = True
                 st.session_state['user'] = user_select
+                
+                # Set Cookie
                 expire_date = datetime.now() + timedelta(days=30)
                 cookie_manager.set("active_user", user_select, expires_at=expire_date)
-                st.success("Logged in!")
-                time.sleep(0.5)
+                
+                # --- ANIMATION HERE ---
+                st.balloons()
+                st.toast(f"Welcome, {user_select}!", icon="👋")
+                
+                time.sleep(1) # Slight pause to enjoy the balloons
                 st.rerun()
             else:
                 st.error("Wrong PIN!")
@@ -214,21 +224,19 @@ def main():
         st.subheader("To-Do List")
         active_tasks = [t for t in data['tasks'] if t['Status'] == "Active" and (t['Assignee'] == "Any" or t['Assignee'] == user)]
         
+        if not active_tasks:
+            st.info("No active tasks! Enjoy your day! 🌞")
+
         for task in active_tasks:
             with st.container(border=True):
-                c_check, c_text, c_btn = st.columns([0.5, 3, 1.2])
-                
-                # Checkbox Key
-                chk_key = f"chk_{task['ID']}"
-                is_checked = c_check.checkbox("", key=chk_key)
+                # 3 columns: Text (Wide) | Button (Narrow)
+                c_text, c_btn = st.columns([3, 1])
                 
                 c_text.write(f"**{task['Title']}**")
                 c_text.caption(f"{float(task['Points']):g} pts • {task['Frequency']}")
                 
-                btn_clicked = c_btn.button("Done", key=f"btn_{task['ID']}", type="primary")
-                
-                # LOGIC
-                if is_checked or btn_clicked:
+                # --- ACTION BUTTON (Functions like a Checkbox) ---
+                if c_btn.button("✅ Done", key=f"btn_{task['ID']}", type="primary"):
                     current_pts = data['users'][user]['points']
                     task_pts = float(task['Points'])
                     new_pts = current_pts + task_pts
@@ -238,11 +246,6 @@ def main():
                     
                     if task['Frequency'] == "One-time":
                         update_status("Tasks", task['ID'], "Completed", 6)
-                    
-                    # --- CRITICAL FIX: FORCE UNCHECK ---
-                    # This prevents the loop where it keeps adding points
-                    if chk_key in st.session_state:
-                        st.session_state[chk_key] = False
                     
                     st.balloons()
                     st.toast(f"Nice job! +{task_pts:g} Points")
@@ -295,6 +298,7 @@ def main():
             st.write("### 🛡️ Admin Dashboard")
             p_tasks = [t for t in data['tasks'] if t['Status'] == "Pending Approval"]
             p_rewards = [r for r in data['rewards'] if r['Status'] == "Pending Approval"]
+            
             if p_tasks:
                 st.write(f"**Tasks Pending ({len(p_tasks)})**")
                 for t in p_tasks:
