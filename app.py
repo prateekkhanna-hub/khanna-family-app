@@ -9,6 +9,8 @@ import time
 SHEET_NAME = "Khanna Family App DB"
 
 # --- GOOGLE SHEETS CONNECTION ---
+# We keep the connection open to save time
+@st.cache_resource
 def get_connection():
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     try:
@@ -19,28 +21,37 @@ def get_connection():
     
     return gspread.authorize(creds).open(SHEET_NAME)
 
-# --- DATA FUNCTIONS ---
+# --- DATA FUNCTIONS (BATCH FETCH) ---
 def load_data():
     sh = get_connection()
     
-    # We add a tiny delay to be nice to the API
-    time.sleep(0.5)
+    # ---------------------------------------------------------
+    # THE FIX: Read ALL tabs in 1 single API Call
+    # This prevents "Quota Exceeded" errors
+    # ---------------------------------------------------------
+    ranges = ['Tasks!A:Z', 'Rewards!A:Z', 'History!A:Z', 'Users!A:Z']
+    results = sh.values_batch_get(ranges)
     
-    # Load the 4 sheets directly
-    tasks = sh.worksheet("Tasks").get_all_records()
-    rewards = sh.worksheet("Rewards").get_all_records()
-    history = sh.worksheet("History").get_all_records()
-    users = sh.worksheet("Users").get_all_records()
+    # Helper to clean up the data
+    def get_df(index):
+        rows = results['valueRanges'][index].get('values', [])
+        if not rows: return []
+        headers = rows[0]
+        return [dict(zip(headers, row)) for row in rows[1:]]
+
+    tasks = get_df(0)
+    rewards = get_df(1)
+    history = get_df(2)
+    users_list = get_df(3)
     
-    # Create a dictionary for easier user lookup
-    # { "Prateek": {"role": "admin", "pin": "0123", "points": 50.0} }
-    user_dict = {}
-    for row in users:
-        # Handle cases where points might be empty string
+    # Organize Users
+    users_dict = {}
+    for row in users_list:
+        # Safety check: if Points is empty, treat as 0
         pts = row.get('Points', 0)
         if pts == "": pts = 0
             
-        user_dict[row['Name']] = {
+        users_dict[row['Name']] = {
             'role': row['Role'], 
             'pin': str(row['Pin']),
             'points': float(pts)
@@ -50,7 +61,7 @@ def load_data():
         "tasks": tasks, 
         "rewards": rewards, 
         "history": history,
-        "users": user_dict
+        "users": users_dict
     }
 
 def log_history(user, action, item, points_change):
@@ -62,9 +73,7 @@ def log_history(user, action, item, points_change):
 def update_points(user, new_amount):
     sh = get_connection()
     ws = sh.worksheet("Users")
-    # Find user in Column A (1)
     cell = ws.find(user, in_column=1)
-    # Update Points in Column D (4)
     ws.update_cell(cell.row, 4, new_amount)
 
 def add_entry(sheet_name, data_list):
@@ -80,6 +89,7 @@ def update_status(sheet_name, item_id, new_status, status_col_index):
 
 # --- AUTHENTICATION ---
 def check_password(user_data):
+    # If already logged in, skip the check
     if st.session_state.get('authenticated', False):
         return True
     
@@ -87,7 +97,7 @@ def check_password(user_data):
     
     valid_users = list(user_data.keys())
     if not valid_users:
-        st.error("No users found! Check 'Users' tab in Sheets.")
+        st.error("Connection successful, but no Users found in Sheet.")
         return False
         
     user_select = st.sidebar.selectbox("Who are you?", valid_users)
@@ -122,8 +132,10 @@ def main():
     try:
         data = load_data()
     except Exception as e:
-        st.error(f"Waiting for Google API... (Try refreshing in 30s). Error: {e}")
-        st.stop()
+        # If API fails, wait and reload automatically
+        st.warning("Syncing...")
+        time.sleep(1)
+        st.rerun()
 
     if not check_password(data['users']):
         st.title("🏠 Khanna Family Tasks")
@@ -142,7 +154,6 @@ def main():
     
     # --- DASHBOARD ---
     st.write("### 🏆 Family Leaderboard")
-    # Sort family members so it's consistent
     family_members = sorted(list(data['users'].keys()))
     cols = st.columns(len(family_members))
     
