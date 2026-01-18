@@ -173,6 +173,53 @@ def log_history(user, action, item, points_change):
     date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     ws.append_row([date_str, user, action, item, points_change])
 
+def check_if_task_done_today(task_title, user, history_data, frequency):
+    """
+    Returns TRUE if the task should be HIDDEN (because it was already done).
+    Returns FALSE if the task should be SHOWN.
+    """
+    # 1. Filter history for this user and task
+    # History structure: Date, User, Action, Item, Points
+    # We need to parse the date carefully
+    
+    today = datetime.now().date()
+    current_hour = datetime.now().hour
+    
+    # Simple AM/PM split: AM is before 4PM (16:00), PM is after 4PM
+    is_pm_now = current_hour >= 16 
+
+    count_today = 0
+    done_am = False
+    done_pm = False
+
+    for row in history_data:
+        h_user = row.get('User') or row.get('user')
+        h_item = row.get('Item') or row.get('item')
+        h_date_str = row.get('Date') or row.get('date') # Format: YYYY-MM-DD HH:MM
+        
+        if h_user == user and h_item == task_title:
+            try:
+                h_dt = datetime.strptime(h_date_str, "%Y-%m-%d %H:%M")
+                if h_dt.date() == today:
+                    count_today += 1
+                    if h_dt.hour >= 16: done_pm = True
+                    else: done_am = True
+            except:
+                continue
+
+    if frequency == "Daily":
+        return count_today > 0 # Hide if done even once today
+        
+    if frequency == "Twice Daily":
+        # If it's PM now, hide ONLY if done in PM. 
+        # If it's AM now, hide ONLY if done in AM.
+        if is_pm_now:
+            return done_pm
+        else:
+            return done_am
+            
+    return False # Default show
+
 def get_login_manager():
     return stx.CookieManager()
 
@@ -263,47 +310,69 @@ def main():
 
     with tab1:
         st.subheader("Active Quests")
-        my_tasks = [t for t in data['tasks'] if t['Status'] == "Active" and ("Any" in str(t['Assignee']) or user in str(t['Assignee']))]
-        if not my_tasks: st.info("No active quests!")
-        for task in my_tasks:
+        
+        # FILTER TASKS based on User AND Frequency Logic
+        visible_tasks = []
+        for t in data['tasks']:
+            # 1. Check Assignee
+            assignees = str(t.get('Assignee', 'Any'))
+            if t['Status'] == "Active" and ("Any" in assignees or user in assignees):
+                # 2. Check Recurring Logic
+                freq = t.get('Frequency', 'One-time')
+                is_hidden = check_if_task_done_today(t['Title'], user, data['history'], freq)
+                
+                if not is_hidden:
+                    visible_tasks.append(t)
+
+        if not visible_tasks: st.info("All quests completed for now! 🌟")
+        
+        for task in visible_tasks:
             with st.container(border=True):
                 c_text, c_btn = st.columns([3, 1])
                 base_points = float(task['Points'])
-                multiplier = 1.0
-                if user_data['streak'] >= 7: multiplier = 1.5
-                elif user_data['streak'] >= 3: multiplier = 1.2
-                final_points = base_points * multiplier
+                
+                # Visuals
+                freq_icon = "🔄" if task.get('Frequency') in ["Daily", "Twice Daily"] else "🔹"
                 c_text.write(f"**{task['Title']}**")
-                if multiplier > 1.0: c_text.markdown(f"Points: ~~{base_points}~~ **{final_points:.1f}** (🔥 x{multiplier} Bonus!)")
-                else: c_text.caption(f"Points: {base_points} • {task['Frequency']}")
-                if c_btn.button("Complete", key=f"btn_{task['ID']}", type="primary"):
+                c_text.caption(f"{freq_icon} {task.get('Frequency', 'One-time')} • {base_points} pts")
+                
+                if c_btn.button("Done", key=f"btn_{task['ID']}", type="primary"):
+                    # Calculate Multiplier
+                    multiplier = 1.0
+                    if user_data['streak'] >= 7: multiplier = 1.5
+                    elif user_data['streak'] >= 3: multiplier = 1.2
+                    final_points = base_points * multiplier
+
                     update_user_stats(user, final_points, final_points)
                     log_history(user, "Quest Complete", task['Title'], f"+{final_points:g}")
-                    if task['Frequency'] == "One-time": update_status("Tasks", task['ID'], "Completed", 6)
-                    st.balloons(); st.toast(f"Completed! +{final_points:g} Gold & XP"); time.sleep(1.5); st.rerun()
+                    
+                    # LOGIC: Only mark "Completed" in DB if it is One-time.
+                    # If Daily/Twice Daily, we leave it "Active" but history hides it.
+                    if task.get('Frequency') == "One-time":
+                        update_status("Tasks", task['ID'], "Completed", 6)
+                    
+                    st.balloons()
+                    st.toast(f"Nice! +{final_points:g} Gold")
+                    time.sleep(1.0)
+                    st.rerun()
 
-        # --- SUGGEST NEW TASK (MOVED HERE) ---
         st.divider()
         with st.expander("💡 Propose a New Quest"):
-            st.caption("Suggest a chore you want to do for points! Parents must approve it first.")
+            st.caption("Suggest a chore you want to do for points!")
             with st.form("suggest_task_form"):
                 s_title = st.text_input("Quest Name (e.g. Wash Car)")
                 s_pts = st.number_input("Points Request", min_value=1.0, step=0.5)
-                # Assignee Selector (Defaults to current user)
+                s_freq = st.selectbox("Frequency", ["One-time", "Daily", "Twice Daily"])
                 all_users = ["Any"] + list(data['users'].keys())
                 s_assignees = st.multiselect("Who is this for?", all_users, default=[user])
                 
                 if st.form_submit_button("Submit Proposal"):
-                    if not s_title:
-                        st.error("Please enter a name.")
+                    if not s_title: st.error("Please enter a name.")
                     else:
-                        # Join list into string "Rhea, Prateek"
                         assignee_str = ", ".join(s_assignees) if s_assignees else "Any"
                         nid = int(datetime.now().timestamp())
-                        # Status is "Pending Approval"
-                        add_entry("Tasks", [nid, s_title, s_pts, assignee_str, "One-time", "Pending Approval"])
-                        st.success("Sent to parents for approval!")
-                        time.sleep(1); st.rerun()
+                        add_entry("Tasks", [nid, s_title, s_pts, assignee_str, s_freq, "Pending Approval"])
+                        st.success("Sent to parents for approval!"); time.sleep(1); st.rerun()
 
     with tab2:
         st.subheader("Marketplace")
@@ -370,38 +439,4 @@ def main():
                     st.success("Goal Updated!"); time.sleep(1); st.rerun()
 
             st.divider()
-            p_tasks = [t for t in data['tasks'] if t['Status'] == "Pending Approval"]
-            p_rewards = [r for r in data['rewards'] if r['Status'] == "Pending Approval"]
-            if p_tasks or p_rewards:
-                st.write("#### ⏳ Pending Approvals")
-                for t in p_tasks:
-                    c1, c2, c3 = st.columns([2, 1, 1])
-                    c1.write(f"Task: {t['Title']} ({t['Points']} pts)")
-                    if c2.button("✅", key=f"at_{t['ID']}"): update_status("Tasks", t['ID'], "Active", 6); st.rerun()
-                    if c3.button("❌", key=f"rt_{t['ID']}"): update_status("Tasks", t['ID'], "Rejected", 6); st.rerun()
-                for r in p_rewards:
-                    c1, c2, c3 = st.columns([2, 1, 1])
-                    c1.write(f"Reward: {r['Title']} ({r['Cost']} pts)")
-                    if c2.button("✅", key=f"apr_{r['ID']}"): update_status("Rewards", r['ID'], "Approved", 4); st.rerun()
-                    if c3.button("❌", key=f"rjr_{r['ID']}"): update_status("Rewards", r['ID'], "Rejected", 4); st.rerun()
-            else: st.info("No pending items.")
-            
-            st.divider()
-            with st.expander("➕ Create Task (Admin)"):
-                tt = st.text_input("Title")
-                tp = st.number_input("Points", min_value=1.0)
-                # MULTI-SELECT FOR ADMIN TOO
-                admin_all_users = ["Any"] + list(data['users'].keys())
-                ta_list = st.multiselect("Assignee(s)", admin_all_users, default=["Any"])
-                
-                if st.button("Create"):
-                    if not tt: st.error("Name required")
-                    else:
-                        ta_str = ", ".join(ta_list) if ta_list else "Any"
-                        add_entry("Tasks", [int(datetime.now().timestamp()), tt, tp, ta_str, "One-time", "Active"])
-                        st.success("Created!"); time.sleep(1); st.rerun()
-        else:
-            st.warning(f"Restricted Area. You are logged in as role: '{role}'")
-
-if __name__ == "__main__":
-    main()
+            p_tasks
