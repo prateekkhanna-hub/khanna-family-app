@@ -168,14 +168,11 @@ def main():
                 st.session_state['authenticated'] = True
                 st.session_state['user'] = user_select
                 
-                # Set Cookie
                 expire_date = datetime.now() + timedelta(days=30)
                 cookie_manager.set("active_user", user_select, expires_at=expire_date)
                 
-                # --- ANIMATION HERE ---
                 st.balloons()
                 st.toast(f"Welcome, {user_select}!", icon="👋")
-                
                 time.sleep(1) 
                 st.rerun()
             else:
@@ -222,20 +219,34 @@ def main():
     # --- TAB 1: TASKS ---
     with tab1:
         st.subheader("To-Do List")
-        active_tasks = [t for t in data['tasks'] if t['Status'] == "Active" and (t['Assignee'] == "Any" or t['Assignee'] == user)]
         
-        if not active_tasks:
+        # --- NEW FILTERING LOGIC ---
+        # We need to check if the user is in the "Assignee" string (e.g., "Raghav, Rhea")
+        # or if it is assigned to "Any"
+        my_tasks = []
+        for t in data['tasks']:
+            assignees = str(t['Assignee']) # Convert to string to be safe
+            if t['Status'] == "Active":
+                if "Any" in assignees or user in assignees:
+                    my_tasks.append(t)
+        
+        if not my_tasks:
             st.info("No active tasks! Enjoy your day! 🌞")
 
-        for task in active_tasks:
+        for task in my_tasks:
             with st.container(border=True):
-                # 3 columns: Text (Wide) | Button (Narrow)
                 c_text, c_btn = st.columns([3, 1])
                 
-                c_text.write(f"**{task['Title']}**")
-                c_text.caption(f"{float(task['Points']):g} pts • {task['Frequency']}")
+                # Visual Indicator: Is this a group task?
+                assignee_display = task['Assignee']
+                if "," in assignee_display:
+                    assignee_display = "Shared Task"
+                elif assignee_display == "Any":
+                    assignee_display = "Anyone"
                 
-                # --- ACTION BUTTON (Functions like a Checkbox) ---
+                c_text.write(f"**{task['Title']}**")
+                c_text.caption(f"{float(task['Points']):g} pts • {task['Frequency']} • {assignee_display}")
+                
                 if c_btn.button("✅ Done", key=f"btn_{task['ID']}", type="primary"):
                     current_pts = data['users'][user]['points']
                     task_pts = float(task['Points'])
@@ -255,15 +266,32 @@ def main():
         st.divider()
         with st.expander("➕ Suggest New Task"):
             with st.form("new_task_form"):
+                
+                # --- NEW MULTI-SELECT ASSIGNMENT ---
+                assignee_str = user # Default for kids
+                
+                if role == "admin":
+                    all_members = ["Any"] + family_members
+                    # Multi-select returns a list: ['Raghav', 'Rhea']
+                    selected_assignees = st.multiselect("Who is this task for?", all_members, default=["Any"])
+                    
+                    # Convert list to string for Google Sheets: "Raghav, Rhea"
+                    if not selected_assignees:
+                        assignee_str = "Any" # Fallback
+                    elif "Any" in selected_assignees:
+                        assignee_str = "Any" # Any overrides others
+                    else:
+                        assignee_str = ", ".join(selected_assignees)
+                else:
+                    st.write(f"**Assigning to:** {user}")
+                
                 t_title = st.text_input("Task Name")
-                # --- UPDATE: Set Default to 0.0 to force user input ---
                 t_pts = st.number_input("Points", min_value=0.0, value=0.0, step=0.25, format="%.2f")
                 
                 if st.form_submit_button("Submit Task"):
-                    # --- VALIDATION: Prevent submitting if points are 0 ---
                     if t_pts > 0:
                         new_id = len(data['tasks']) + 101
-                        add_entry("Tasks", [new_id, t_title, t_pts, "Any", "One-time", "Pending Approval"])
+                        add_entry("Tasks", [new_id, t_title, t_pts, assignee_str, "One-time", "Pending Approval"])
                         st.success("Task sent for approval!")
                     else:
                         st.error("⚠️ Please enter a point value (greater than 0).")
@@ -292,11 +320,9 @@ def main():
         with st.expander("➕ Suggest New Reward"):
             with st.form("new_reward_form"):
                 r_title = st.text_input("Reward Name")
-                # --- UPDATE: Set Default to 0.0 ---
                 r_cost = st.number_input("Cost", min_value=0.0, value=0.0, step=0.25, format="%.2f")
                 
                 if st.form_submit_button("Submit Reward Request"):
-                    # --- VALIDATION: Prevent submitting if cost is 0 ---
                     if r_cost > 0:
                         new_id = len(data['rewards']) + 201
                         add_entry("Rewards", [new_id, r_title, r_cost, "Pending Approval"])
@@ -315,7 +341,7 @@ def main():
                 st.write(f"**Tasks Pending ({len(p_tasks)})**")
                 for t in p_tasks:
                     with st.container(border=True):
-                        st.write(f"Task: {t['Title']} ({float(t['Points']):g} pts)")
+                        st.write(f"Task: {t['Title']} (for {t['Assignee']}) — {float(t['Points']):g} pts")
                         c1, c2 = st.columns(2)
                         if c1.button("Approve", key=f"app_t_{t['ID']}"):
                             update_status("Tasks", t['ID'], "Active", 6)
