@@ -80,7 +80,56 @@ def get_login_manager():
 # --- MAIN APP ---
 def main():
     st.set_page_config(page_title="Khanna Family Tasks", page_icon="🏠")
-    st.markdown("""<style>.stButton>button {width: 100%; border-radius: 12px; height: 3.5em;} div[data-testid="stMetricValue"] {font-size: 1.8rem;}</style>""", unsafe_allow_html=True)
+    
+    # -------------------------------------------------------------------------
+    # CUSTOM CSS: Green Buttons & Stat Cards
+    # -------------------------------------------------------------------------
+    st.markdown("""
+        <style>
+        /* Make all PRIMARY buttons GREEN */
+        div.stButton > button[kind="primary"] {
+            background-color: #28a745;
+            border-color: #28a745;
+            color: white;
+            font-weight: bold;
+            height: 3.5em;
+            width: 100%;
+            border-radius: 12px;
+        }
+        /* Make standard buttons standard height */
+        div.stButton > button[kind="secondary"] {
+            height: 3.5em;
+            width: 100%;
+            border-radius: 12px;
+        }
+
+        /* Stat Card Styling */
+        .stat-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: center;
+            margin-bottom: 20px;
+        }
+        .stat-card {
+            background-color: #262730;
+            border: 1px solid #464b59;
+            border-radius: 10px;
+            padding: 15px;
+            text-align: center;
+            flex: 1;
+            min-width: 80px;
+            max-width: 150px;
+        }
+        .stat-card.active {
+            border: 2px solid #ff4b4b; 
+            background-color: #362022;
+        }
+        .stat-value { font-size: 1.8rem; font-weight: bold; margin: 0; color: white; }
+        .stat-label { font-size: 0.9rem; margin: 5px 0 0 0; color: #ccc; }
+        .crown { font-size: 1.2rem; margin-bottom: 5px; display: block;}
+        </style>
+        """, unsafe_allow_html=True)
 
     try:
         data = load_data()
@@ -92,15 +141,9 @@ def main():
     # --- COOKIE LOGIC ---
     cookie_manager = get_login_manager()
     time.sleep(0.1)
-    
     cookie_user = cookie_manager.get("active_user")
 
-    # ---------------------------------------------------------
-    # THE FIX: Check BOTH Cookie AND Session State
-    # ---------------------------------------------------------
-    # We check if (1) The cookie is set OR (2) The user just logged in this session
     is_authenticated = False
-    
     if cookie_user and cookie_user in data['users']:
         is_authenticated = True
         user = cookie_user
@@ -108,7 +151,7 @@ def main():
         is_authenticated = True
         user = st.session_state.get('user')
 
-    # If NOT authenticated by either method, show login
+    # LOGIN SCREEN
     if not is_authenticated:
         st.title("🔒 Login")
         valid_users = list(data['users'].keys())
@@ -119,17 +162,14 @@ def main():
         user_select = st.selectbox("Who are you?", valid_users)
         pin_input = st.text_input("Enter PIN", type="password")
         
-        if st.button("Login"):
+        # Use primary=True to make it green
+        if st.button("Login", type="primary"):
             correct_pin = str(data['users'][user_select]['pin'])
             if pin_input == correct_pin:
-                # 1. Update Session State (Instant access)
                 st.session_state['authenticated'] = True
                 st.session_state['user'] = user_select
-                
-                # 2. Update Cookie (For next refresh)
                 expire_date = datetime.now() + timedelta(days=30)
                 cookie_manager.set("active_user", user_select, expires_at=expire_date)
-                
                 st.success("Logged in!")
                 time.sleep(0.5)
                 st.rerun()
@@ -137,48 +177,78 @@ def main():
                 st.error("Wrong PIN!")
         return
 
-    # If we get here, the user is logged in
+    # LOGGED IN
     role = data['users'][user]['role']
 
-    # Sidebar Logout
-    st.sidebar.divider()
-    st.sidebar.write(f"Logged in as: **{user}**")
-    if st.sidebar.button("Logout"):
+    # Header / Logout
+    c1, c2 = st.columns([3, 1])
+    c1.title(f"👋 Hi, {user}!")
+    if c2.button("Logout"):
         cookie_manager.delete("active_user")
-        st.session_state['authenticated'] = False # Clear session too
+        st.session_state['authenticated'] = False
         st.rerun()
     
-    st.title(f"👋 Hi, {user}!")
-    
-    # --- DASHBOARD ---
+    # DASHBOARD
     st.write("### 🏆 Family Leaderboard")
     family_members = sorted(list(data['users'].keys()))
-    cols = st.columns(len(family_members))
-    for idx, member_name in enumerate(family_members):
-        score = data['users'][member_name]['points']
-        label = f"⭐ {member_name}" if member_name == user else member_name
-        cols[idx].metric(label, f"{score:g}")
-
+    max_score = -1
+    for m in family_members:
+        s = data['users'][m]['points']
+        if s > max_score: max_score = s
+        
+    html_content = '<div class="stat-container">'
+    for member in family_members:
+        score = data['users'][member]['points']
+        card_class = "stat-card"
+        if member == user: card_class += " active"
+        
+        icon_html = ""
+        if score == max_score and score > 0: icon_html = '<span class="crown">👑 Leader</span>'
+        elif member == user: icon_html = '<span class="crown">⭐ You</span>'
+        else: icon_html = '<span class="crown" style="visibility:hidden;">.</span>'
+            
+        html_content += f"""<div class="{card_class}">{icon_html}<p class="stat-value">{score:g}</p><p class="stat-label">{member}</p></div>"""
+    html_content += "</div>"
+    st.markdown(html_content, unsafe_allow_html=True)
+    
     st.divider()
     tab1, tab2, tab3 = st.tabs(["📝 Tasks", "🎁 Rewards", "⚙️ Admin"])
 
+    # --- TAB 1: TASKS ---
     with tab1:
         st.subheader("To-Do List")
         active_tasks = [t for t in data['tasks'] if t['Status'] == "Active" and (t['Assignee'] == "Any" or t['Assignee'] == user)]
+        
         for task in active_tasks:
             with st.container(border=True):
-                c1, c2 = st.columns([3, 1])
-                c1.write(f"**{task['Title']}**")
-                c1.caption(f"{float(task['Points']):g} pts • {task['Frequency']}")
-                if c2.button("Done", key=f"done_{task['ID']}"):
+                # Columns: Checkbox (Small) | Text (Wide) | Button (Medium)
+                c_check, c_text, c_btn = st.columns([0.5, 3, 1.2])
+                
+                # 1. THE CHECKBOX (Left)
+                is_checked = c_check.checkbox("", key=f"chk_{task['ID']}")
+                
+                # 2. THE TEXT (Middle)
+                c_text.write(f"**{task['Title']}**")
+                c_text.caption(f"{float(task['Points']):g} pts • {task['Frequency']}")
+                
+                # 3. THE BUTTON (Right) - Type="primary" makes it GREEN via CSS
+                btn_clicked = c_btn.button("Done", key=f"btn_{task['ID']}", type="primary")
+                
+                # LOGIC: If Checkbox OR Button is triggered
+                if is_checked or btn_clicked:
                     current_pts = data['users'][user]['points']
                     task_pts = float(task['Points'])
                     new_pts = current_pts + task_pts
+                    
                     update_points(user, new_pts)
                     log_history(user, "Completed Task", task['Title'], f"+{task_pts:g}")
+                    
                     if task['Frequency'] == "One-time":
                         update_status("Tasks", task['ID'], "Completed", 6)
-                    st.toast(f"Good job! +{task_pts:g} Points")
+                    
+                    st.balloons()  # <--- CELEBRATION!
+                    st.toast(f"Nice job! +{task_pts:g} Points")
+                    time.sleep(1) # Wait for visual before reload
                     st.rerun()
 
         st.divider()
@@ -191,6 +261,7 @@ def main():
                     add_entry("Tasks", [new_id, t_title, t_pts, "Any", "One-time", "Pending Approval"])
                     st.success("Task sent for approval!")
 
+    # --- TAB 2: REWARDS ---
     with tab2:
         st.subheader("Rewards Catalog")
         active_rewards = [r for r in data['rewards'] if r['Status'] == "Approved"]
@@ -199,13 +270,15 @@ def main():
                 c1, c2 = st.columns([3, 1])
                 c1.write(f"**{reward['Title']}**")
                 c1.caption(f"Cost: {float(reward['Cost']):g} pts")
+                
                 user_balance = data['users'][user]['points']
                 cost = float(reward['Cost'])
+                
                 if c2.button("Redeem", key=f"redeem_{reward['ID']}", disabled=user_balance < cost):
                     new_pts = user_balance - cost
                     update_points(user, new_pts)
                     log_history(user, "Redeemed Reward", reward['Title'], f"-{cost:g}")
-                    st.balloons()
+                    st.balloons() # <--- CELEBRATION!
                     st.toast("Reward Redeemed!")
                     st.rerun()
         st.divider()
@@ -218,6 +291,7 @@ def main():
                     add_entry("Rewards", [new_id, r_title, r_cost, "Pending Approval"])
                     st.success(f"Reward '{r_title}' sent for approval!")
 
+    # --- TAB 3: ADMIN ---
     with tab3:
         if role == "admin":
             st.write("### 🛡️ Admin Dashboard")
