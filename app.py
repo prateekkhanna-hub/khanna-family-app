@@ -26,9 +26,7 @@ def get_connection():
 
 # --- DATA FUNCTIONS ---
 def clean_header(header):
-    # Removes (A), (B) and extra spaces to standardize keys
-    # "Role (B)" -> "Role"
-    header = re.sub(r'\s*\([A-Z]\)', '', header)
+    header = re.sub(r'\s*\([A-Z]\)', '', header) # Removes (A), (B) etc
     return header.strip()
 
 def load_data():
@@ -40,7 +38,6 @@ def load_data():
         rows = results['valueRanges'][index].get('values', [])
         if not rows: return []
         headers = rows[0]
-        # Clean headers dynamically
         cleaned_headers = [clean_header(h) for h in headers]
         return [dict(zip(cleaned_headers, row)) for row in rows[1:]]
 
@@ -53,24 +50,19 @@ def load_data():
     users_dict = {}
     for row in users_list:
         if not row.get('Name'): continue
-        
-        # Robust Role Check (handles "Admin", "admin", "Admin ")
         role_raw = row.get('Role', 'Kid')
-        role = role_raw.strip().lower() # Converts to 'admin' or 'kid'
-        
+        role = role_raw.strip().lower()
         pin = str(row.get('Pin', '0000'))
         
         try: pts = float(row.get('Points', 0))
         except: pts = 0.0
-            
         try: xp = float(row.get('XP', 0))
         except: xp = 0.0
-            
         try: streak = int(row.get('Streak', 0))
         except: streak = 0
         
         users_dict[row['Name']] = {
-            'role': role, # stored as lowercase 'admin'
+            'role': role,
             'pin': pin,
             'points': pts,
             'xp': xp,
@@ -90,17 +82,10 @@ def load_data():
 # --- LOGIC & UPDATES ---
 def update_setting(key, value):
     sh = get_connection()
-    try:
-        ws = sh.worksheet("Settings")
-    except:
-        ws = sh.add_worksheet(title="Settings", rows=10, cols=2)
-        ws.append_row(["Setting", "Value"])
-        
-    try:
-        cell = ws.find(key, in_column=1)
-        ws.update_cell(cell.row, 2, value)
-    except:
-        ws.append_row([key, value])
+    try: ws = sh.worksheet("Settings")
+    except: ws = sh.add_worksheet(title="Settings", rows=10, cols=2); ws.append_row(["Setting", "Value"])
+    try: cell = ws.find(key, in_column=1); ws.update_cell(cell.row, 2, value)
+    except: ws.append_row([key, value])
 
 def calculate_level(xp):
     if xp <= 0: return 1, "Rookie 🌱"
@@ -113,23 +98,74 @@ def calculate_level(xp):
     title = titles.get(level, "Cosmic Being 🌌")
     return level, title
 
+def recalculate_all_xp():
+    """Scans History to calculate total lifetime XP for all users."""
+    data = load_data()
+    history = data['history']
+    
+    # dictionary to hold totals: {'Prateek': 105.5, 'Rhea': 50.0}
+    user_xp_totals = {}
+
+    for row in history:
+        # Expected row keys: Date, User, Action, Item, Points_Change
+        # Adjust keys based on your actual history header names
+        user = row.get('User') or row.get('user') # Handle case sensitivity
+        points_str = row.get('Points_Change') or row.get('Points Change') or row.get('points_change')
+        
+        if user and points_str:
+            try:
+                val = float(points_str)
+                # XP only counts positive gains (Tasks/Bonuses), not Spending
+                if val > 0:
+                    user_xp_totals[user] = user_xp_totals.get(user, 0) + val
+            except:
+                continue
+
+    # Now update the Users Sheet
+    sh = get_connection()
+    ws = sh.worksheet("Users")
+    
+    # Iterate through users in sheet to find their row
+    all_values = ws.get_all_values()
+    headers = all_values[0]
+    
+    # Find column index for 'Name' and 'XP'
+    # Headers might be "Name" or "Name (A)" depending on cleanup
+    name_col_idx = -1
+    xp_col_idx = -1
+    
+    for i, h in enumerate(headers):
+        clean_h = clean_header(h).lower()
+        if clean_h == 'name': name_col_idx = i
+        if clean_h == 'xp': xp_col_idx = i
+        
+    if name_col_idx == -1 or xp_col_idx == -1:
+        return False, "Could not find 'Name' or 'XP' columns in Users sheet."
+
+    updates_made = 0
+    for i, row in enumerate(all_values):
+        if i == 0: continue # Skip header
+        
+        name = row[name_col_idx]
+        if name in user_xp_totals:
+            new_xp = user_xp_totals[name]
+            # +1 because spreadsheet rows are 1-based
+            ws.update_cell(i + 1, xp_col_idx + 1, new_xp)
+            updates_made += 1
+            
+    return True, f"Updated XP for {updates_made} users."
+
 def update_user_stats(user, points_change, xp_change):
     sh = get_connection()
     ws = sh.worksheet("Users")
     cell = ws.find(user, in_column=1)
     current_values = ws.row_values(cell.row)
     
-    # Indices might shift if header has (A), (B), but GSpread creates 1-based index
-    # Assuming standard order: Name, Role, Pin, Points, Streak, Last_Active, Badges, XP
-    
     try: old_points = float(current_values[3])
     except: old_points = 0.0
-    
     try: old_streak = int(current_values[4])
     except: old_streak = 0
-    
     last_active_str = current_values[5] if len(current_values) > 5 else ""
-    
     try: old_xp = float(current_values[7])
     except: old_xp = 0.0
 
@@ -173,7 +209,6 @@ def log_history(user, action, item, points_change):
     date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     ws.append_row([date_str, user, action, item, points_change])
 
-# --- LOGIN MANAGER ---
 def get_login_manager():
     return stx.CookieManager()
 
@@ -181,44 +216,17 @@ def get_login_manager():
 def main():
     st.set_page_config(page_title="Khanna Family Quest", page_icon="🛡️", layout="centered")
     
-    # ---------------- COMPACT CSS ----------------
     st.markdown("""
         <style>
-        /* COMPACT BUTTONS */
-        div.stButton > button {
-            width: 100%;
-            border-radius: 8px;
-            font-weight: bold;
-            height: 2.5em !important; 
-            padding: 0px 10px;
-        }
-        div.stButton > button[kind="primary"] {
-            background-color: #28a745; color: white;
-        }
-        
-        /* STAT STRIP */
-        .stat-strip {
-            display: flex;
-            justify-content: space-between;
-            background-color: #262730;
-            border: 1px solid #464b59;
-            border-radius: 10px;
-            padding: 10px 15px;
-            margin-bottom: 15px;
-            align-items: center;
-        }
+        div.stButton > button { width: 100%; border-radius: 8px; font-weight: bold; height: 2.5em !important; padding: 0px 10px; }
+        div.stButton > button[kind="primary"] { background-color: #28a745; color: white; }
+        .stat-strip { display: flex; justify-content: space-between; background-color: #262730; border: 1px solid #464b59; border-radius: 10px; padding: 10px 15px; margin-bottom: 15px; align-items: center; }
         .stat-item { text-align: center; flex: 1; }
         .stat-icon { font-size: 1.2rem; margin-bottom: 2px; display: block; }
         .stat-value { font-weight: bold; font-size: 1.1rem; margin: 0; color: white; }
         .stat-label { font-size: 0.75rem; color: #aaa; margin: 0; }
-        
-        /* HALL OF FAME CARDS */
-        .stat-card {
-            background-color: #262730; border: 1px solid #464b59; border-radius: 10px; padding: 10px; margin-bottom: 8px;
-        }
+        .stat-card { background-color: #262730; border: 1px solid #464b59; border-radius: 10px; padding: 10px; margin-bottom: 8px; }
         .active-card { border: 2px solid #ff4b4b; background-color: #362022; }
-
-        /* TIGHT HEADERS */
         h3 { margin-top: -20px !important; padding-top: 0px !important; margin-bottom: 5px !important; }
         .stProgress > div > div > div > div { background-color: #00d4ff; }
         .block-container { padding-top: 2rem !important; padding-bottom: 5rem !important; }
@@ -228,21 +236,16 @@ def main():
     try:
         data = load_data()
     except Exception as e:
-        st.error(f"⚠️ Database Error: {e}")
-        st.stop()
+        st.error(f"⚠️ Database Error: {e}"); st.stop()
 
     cookie_manager = get_login_manager()
-    if 'authenticated' not in st.session_state:
-        st.session_state['authenticated'] = False
-        st.session_state['user'] = None
+    if 'authenticated' not in st.session_state: st.session_state['authenticated'] = False; st.session_state['user'] = None
 
     if not st.session_state['authenticated']:
         time.sleep(0.1)
         cookie_user = cookie_manager.get("active_user")
         if cookie_user and cookie_user in data['users']:
-            st.session_state['authenticated'] = True
-            st.session_state['user'] = cookie_user
-            st.rerun()
+            st.session_state['authenticated'] = True; st.session_state['user'] = cookie_user; st.rerun()
 
     if not st.session_state['authenticated']:
         st.title("🛡️ Family Quest Login")
@@ -253,18 +256,15 @@ def main():
         if st.button("Enter Realm", type="primary"):
             correct_pin = str(data['users'][user_select]['pin'])
             if pin_input == correct_pin:
-                st.session_state['authenticated'] = True
-                st.session_state['user'] = user_select
+                st.session_state['authenticated'] = True; st.session_state['user'] = user_select
                 cookie_manager.set("active_user", user_select, expires_at=datetime.now() + timedelta(days=30))
                 st.balloons(); st.rerun()
             else: st.error("Wrong PIN!")
         return
 
-    # --- MAIN DASHBOARD (COMPACT) ---
     user = st.session_state['user']
     user_data = data['users'][user]
     role = user_data['role']
-    
     level, title = calculate_level(user_data['xp'])
     
     prev_threshold = ((level - 1) * 2) ** 2 if level > 1 else 0
@@ -272,37 +272,19 @@ def main():
     if next_threshold <= prev_threshold: next_threshold = prev_threshold + 10
     xp_percent = max(0.0, min(1.0, (user_data['xp'] - prev_threshold) / (next_threshold - prev_threshold)))
 
-    # HEADER
     top_c1, top_c2 = st.columns([3, 1])
-    with top_c1:
-        st.markdown(f"### {user} <span style='font-size:0.9rem; color:#aaa; font-weight:normal'>({title})</span>", unsafe_allow_html=True)
+    with top_c1: st.markdown(f"### {user} <span style='font-size:0.9rem; color:#aaa; font-weight:normal'>({title})</span>", unsafe_allow_html=True)
     with top_c2:
-        if st.button("🚪 Logout"):
-            cookie_manager.delete("active_user")
-            st.session_state['authenticated'] = False; st.session_state['user'] = None; st.rerun()
+        if st.button("🚪 Logout"): cookie_manager.delete("active_user"); st.session_state['authenticated'] = False; st.session_state['user'] = None; st.rerun()
             
-    # STAT STRIP
     st.markdown(f"""
     <div class="stat-strip">
-        <div class="stat-item" style="border-right: 1px solid #444;">
-            <span class="stat-icon">💰</span>
-            <p class="stat-value">{user_data['points']:g}</p>
-            <p class="stat-label">Gold</p>
-        </div>
-        <div class="stat-item" style="border-right: 1px solid #444;">
-            <span class="stat-icon">🔥</span>
-            <p class="stat-value">{user_data['streak']}</p>
-            <p class="stat-label">Days</p>
-        </div>
-        <div class="stat-item">
-            <span class="stat-icon">⚔️</span>
-            <p class="stat-value">{level}</p>
-            <p class="stat-label">Level</p>
-        </div>
+        <div class="stat-item" style="border-right: 1px solid #444;"><span class="stat-icon">💰</span><p class="stat-value">{user_data['points']:g}</p><p class="stat-label">Gold</p></div>
+        <div class="stat-item" style="border-right: 1px solid #444;"><span class="stat-icon">🔥</span><p class="stat-value">{user_data['streak']}</p><p class="stat-label">Days</p></div>
+        <div class="stat-item"><span class="stat-icon">⚔️</span><p class="stat-value">{level}</p><p class="stat-label">Level</p></div>
     </div>
     """, unsafe_allow_html=True)
     
-    # XP & FAMILY GOAL (Collapsible)
     g_current = data['settings'].get('Family_Goal_Current', 0)
     g_target = data['settings'].get('Family_Goal_Target', GLOBAL_GOAL_TARGET_DEFAULT)
     g_title = data['settings'].get('Family_Goal_Title', GLOBAL_GOAL_TITLE_DEFAULT)
@@ -315,7 +297,6 @@ def main():
         st.write(f"**Your XP Progress:** {int(user_data['xp'])} / {int(next_threshold)}")
         st.progress(xp_percent)
 
-    # --- TABS ---
     tab1, tab2, tab3, tab4 = st.tabs(["⚔️ Quests", "🎁 Loot", "🏆 Fame", "⚙️ Admin"])
 
     with tab1:
@@ -381,27 +362,33 @@ def main():
         if role == "admin": 
             st.write("### 🛡️ Admin Controls")
             
-            # FAMILY GOAL SETTINGS
+            # --- XP SYNC BUTTON ---
+            with st.container(border=True):
+                st.write("#### 🔧 Maintenance")
+                st.info("Click this if XP looks wrong. It will look at History and recalculate total XP.")
+                if st.button("🔄 Sync XP from History"):
+                    with st.spinner("Crunching numbers..."):
+                        success, msg = recalculate_all_xp()
+                        if success: st.success(msg)
+                        else: st.error(msg)
+                    time.sleep(2); st.rerun()
+
+            st.divider()
             with st.container(border=True):
                 st.write("#### 🌍 Family Goal Settings")
                 c_goal, c_target, c_save = st.columns([2, 1, 1])
                 current_title = data['settings'].get('Family_Goal_Title', GLOBAL_GOAL_TITLE_DEFAULT)
                 current_target = data['settings'].get('Family_Goal_Target', GLOBAL_GOAL_TARGET_DEFAULT)
-                
                 new_title = c_goal.text_input("Goal Reward Name", value=current_title)
                 new_target = c_target.number_input("Target Points", value=float(current_target))
-                
                 if c_save.button("Update Goal"):
                     update_setting("Family_Goal_Title", new_title)
                     update_setting("Family_Goal_Target", new_target)
                     st.success("Goal Updated!"); time.sleep(1); st.rerun()
 
             st.divider()
-            
-            # PENDING
             p_tasks = [t for t in data['tasks'] if t['Status'] == "Pending Approval"]
             p_rewards = [r for r in data['rewards'] if r['Status'] == "Pending Approval"]
-            
             if p_tasks or p_rewards:
                 st.write("#### ⏳ Pending Approvals")
                 for t in p_tasks:
