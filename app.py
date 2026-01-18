@@ -3,6 +3,7 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
+import time
 
 # --- CONFIGURATION ---
 SHEET_NAME = "Khanna Family App DB"
@@ -16,28 +17,38 @@ def get_connection():
     except:
         creds = Credentials.from_service_account_file("credentials.json", scopes=scope)
     
-    client = gspread.authorize(creds)
-    return client.open(SHEET_NAME)
+    return gspread.authorize(creds).open(SHEET_NAME)
 
 # --- DATA FUNCTIONS ---
 def load_data():
     sh = get_connection()
     
-    # Load all worksheets
+    # We add a tiny delay to be nice to the API
+    time.sleep(0.5)
+    
+    # Load the 4 sheets directly
     tasks = sh.worksheet("Tasks").get_all_records()
     rewards = sh.worksheet("Rewards").get_all_records()
-    balances = sh.worksheet("Balances").get_all_records()
     history = sh.worksheet("History").get_all_records()
-    users = sh.worksheet("Users").get_all_records() # NEW: Load Users from Sheet
+    users = sh.worksheet("Users").get_all_records()
     
-    # Helper dicts
-    balance_dict = {row['User']: row['Points'] for row in balances}
-    user_dict = {row['Name']: {'role': row['Role'], 'pin': str(row['Pin'])} for row in users}
+    # Create a dictionary for easier user lookup
+    # { "Prateek": {"role": "admin", "pin": "0123", "points": 50.0} }
+    user_dict = {}
+    for row in users:
+        # Handle cases where points might be empty string
+        pts = row.get('Points', 0)
+        if pts == "": pts = 0
+            
+        user_dict[row['Name']] = {
+            'role': row['Role'], 
+            'pin': str(row['Pin']),
+            'points': float(pts)
+        }
     
     return {
         "tasks": tasks, 
         "rewards": rewards, 
-        "balances": balance_dict, 
         "history": history,
         "users": user_dict
     }
@@ -48,11 +59,13 @@ def log_history(user, action, item, points_change):
     date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     worksheet.append_row([date_str, user, action, item, points_change])
 
-def update_balance(user, new_amount):
+def update_points(user, new_amount):
     sh = get_connection()
-    ws = sh.worksheet("Balances")
-    cell = ws.find(user)
-    ws.update_cell(cell.row, 2, new_amount)
+    ws = sh.worksheet("Users")
+    # Find user in Column A (1)
+    cell = ws.find(user, in_column=1)
+    # Update Points in Column D (4)
+    ws.update_cell(cell.row, 4, new_amount)
 
 def add_entry(sheet_name, data_list):
     sh = get_connection()
@@ -65,23 +78,23 @@ def update_status(sheet_name, item_id, new_status, status_col_index):
     cell = ws.find(str(item_id), in_column=1)
     ws.update_cell(cell.row, status_col_index, new_status)
 
-# --- AUTHENTICATION LOGIC ---
+# --- AUTHENTICATION ---
 def check_password(user_data):
-    """Returns True if the user is logged in successfully"""
     if st.session_state.get('authenticated', False):
         return True
-        
+    
     st.sidebar.title("🔒 Login")
     
-    # Get user names from the loaded sheet data
     valid_users = list(user_data.keys())
+    if not valid_users:
+        st.error("No users found! Check 'Users' tab in Sheets.")
+        return False
+        
     user_select = st.sidebar.selectbox("Who are you?", valid_users)
     pin_input = st.sidebar.text_input("Enter PIN", type="password")
     
     if st.sidebar.button("Login"):
-        # Check against Sheet Data
         correct_pin = str(user_data[user_select]['pin'])
-        
         if pin_input == correct_pin:
             st.session_state['authenticated'] = True
             st.session_state['user'] = user_select
@@ -89,7 +102,6 @@ def check_password(user_data):
             st.rerun()
         else:
             st.sidebar.error("Wrong PIN!")
-            
     return False
 
 def logout():
@@ -100,7 +112,6 @@ def logout():
 # --- MAIN APP ---
 def main():
     st.set_page_config(page_title="Khanna Family Tasks", page_icon="🏠")
-    
     st.markdown("""
         <style>
         .stButton>button {width: 100%; border-radius: 12px; height: 3.5em;}
@@ -111,16 +122,14 @@ def main():
     try:
         data = load_data()
     except Exception as e:
-        st.error(f"Connection Error: {e}")
+        st.error(f"Waiting for Google API... (Try refreshing in 30s). Error: {e}")
         st.stop()
 
-    # 1. CHECK LOGIN (Pass the data from Sheet)
     if not check_password(data['users']):
         st.title("🏠 Khanna Family Tasks")
         st.info("Please log in from the sidebar.")
         return
 
-    # 2. LOAD APP
     user = st.session_state['user']
     role = st.session_state['role']
     
@@ -133,14 +142,12 @@ def main():
     
     # --- DASHBOARD ---
     st.write("### 🏆 Family Leaderboard")
-    
-    # Dynamic Columns based on Users in Sheet
-    # Filter only family members who have a balance entry
-    family_members = [u for u in data['users'].keys() if u in data['balances']]
+    # Sort family members so it's consistent
+    family_members = sorted(list(data['users'].keys()))
     cols = st.columns(len(family_members))
     
     for idx, member_name in enumerate(family_members):
-        score = float(data['balances'].get(member_name, 0))
+        score = data['users'][member_name]['points']
         label = f"⭐ {member_name}" if member_name == user else member_name
         cols[idx].metric(label, f"{score:g}")
 
@@ -160,11 +167,11 @@ def main():
                 c1.caption(f"{float(task['Points']):g} pts • {task['Frequency']}")
                 
                 if c2.button("Done", key=f"done_{task['ID']}"):
-                    current_pts = float(data['balances'].get(user, 0))
+                    current_pts = data['users'][user]['points']
                     task_pts = float(task['Points'])
                     new_pts = current_pts + task_pts
                     
-                    update_balance(user, new_pts)
+                    update_points(user, new_pts)
                     log_history(user, "Completed Task", task['Title'], f"+{task_pts:g}")
                     
                     if task['Frequency'] == "One-time":
@@ -175,12 +182,13 @@ def main():
 
         st.divider()
         with st.expander("➕ Suggest New Task"):
-            t_title = st.text_input("Task Name")
-            t_pts = st.number_input("Points", min_value=1.0, value=5.0, step=0.25, format="%.2f")
-            if st.button("Submit Task"):
-                new_id = len(data['tasks']) + 101
-                add_entry("Tasks", [new_id, t_title, t_pts, "Any", "One-time", "Pending Approval"])
-                st.success("Task sent for approval!")
+            with st.form("new_task_form"):
+                t_title = st.text_input("Task Name")
+                t_pts = st.number_input("Points", min_value=1.0, value=5.0, step=0.25, format="%.2f")
+                if st.form_submit_button("Submit Task"):
+                    new_id = len(data['tasks']) + 101
+                    add_entry("Tasks", [new_id, t_title, t_pts, "Any", "One-time", "Pending Approval"])
+                    st.success("Task sent for approval!")
 
     # --- TAB 2: REWARDS ---
     with tab2:
@@ -193,12 +201,12 @@ def main():
                 c1.write(f"**{reward['Title']}**")
                 c1.caption(f"Cost: {float(reward['Cost']):g} pts")
                 
-                user_balance = float(data['balances'].get(user, 0))
+                user_balance = data['users'][user]['points']
                 cost = float(reward['Cost'])
                 
                 if c2.button("Redeem", key=f"redeem_{reward['ID']}", disabled=user_balance < cost):
                     new_pts = user_balance - cost
-                    update_balance(user, new_pts)
+                    update_points(user, new_pts)
                     log_history(user, "Redeemed Reward", reward['Title'], f"-{cost:g}")
                     st.balloons()
                     st.toast("Reward Redeemed!")
@@ -206,50 +214,50 @@ def main():
         
         st.divider()
         with st.expander("➕ Suggest New Reward"):
-            r_title = st.text_input("Reward Name")
-            r_cost = st.number_input("Cost", min_value=1.0, value=50.0, step=0.25, format="%.2f")
-            if st.button("Submit Reward Request"):
-                new_id = len(data['rewards']) + 201
-                add_entry("Rewards", [new_id, r_title, r_cost, "Pending Approval"])
-                st.success("Reward sent for approval!")
+            with st.form("new_reward_form"):
+                r_title = st.text_input("Reward Name")
+                r_cost = st.number_input("Cost", min_value=1.0, value=50.0, step=0.25, format="%.2f")
+                if st.form_submit_button("Submit Reward Request"):
+                    new_id = len(data['rewards']) + 201
+                    add_entry("Rewards", [new_id, r_title, r_cost, "Pending Approval"])
+                    st.success(f"Reward '{r_title}' sent for approval!")
 
     # --- TAB 3: ADMIN ---
     with tab3:
         if role == "admin":
             st.write("### 🛡️ Admin Dashboard")
             
-            # Pending Items
-            pending_tasks = [t for t in data['tasks'] if t['Status'] == "Pending Approval"]
-            pending_rewards = [r for r in data['rewards'] if r['Status'] == "Pending Approval"]
+            p_tasks = [t for t in data['tasks'] if t['Status'] == "Pending Approval"]
+            p_rewards = [r for r in data['rewards'] if r['Status'] == "Pending Approval"]
             
-            if pending_tasks or pending_rewards:
-                if pending_tasks:
-                    st.write(f"**Tasks Pending ({len(pending_tasks)})**")
-                    for t in pending_tasks:
-                        with st.container(border=True):
-                            st.write(f"Task: {t['Title']} ({float(t['Points']):g} pts)")
-                            c1, c2 = st.columns(2)
-                            if c1.button("Approve", key=f"app_t_{t['ID']}"):
-                                update_status("Tasks", t['ID'], "Active", 6)
-                                st.rerun()
-                            if c2.button("Reject", key=f"rej_t_{t['ID']}"):
-                                update_status("Tasks", t['ID'], "Rejected", 6)
-                                st.rerun()
-                
-                if pending_rewards:
-                    st.divider()
-                    st.write(f"**Rewards Pending ({len(pending_rewards)})**")
-                    for r in pending_rewards:
-                        with st.container(border=True):
-                            st.write(f"Reward: {r['Title']} ({float(r['Cost']):g} pts)")
-                            c1, c2 = st.columns(2)
-                            if c1.button("Approve", key=f"app_r_{r['ID']}"):
-                                update_status("Rewards", r['ID'], "Approved", 4)
-                                st.rerun()
-                            if c2.button("Reject", key=f"rej_r_{r['ID']}"):
-                                update_status("Rewards", r['ID'], "Rejected", 4)
-                                st.rerun()
-            else:
+            if p_tasks:
+                st.write(f"**Tasks Pending ({len(p_tasks)})**")
+                for t in p_tasks:
+                    with st.container(border=True):
+                        st.write(f"Task: {t['Title']} ({float(t['Points']):g} pts)")
+                        c1, c2 = st.columns(2)
+                        if c1.button("Approve", key=f"app_t_{t['ID']}"):
+                            update_status("Tasks", t['ID'], "Active", 6)
+                            st.rerun()
+                        if c2.button("Reject", key=f"rej_t_{t['ID']}"):
+                            update_status("Tasks", t['ID'], "Rejected", 6)
+                            st.rerun()
+            
+            if p_rewards:
+                st.divider()
+                st.write(f"**Rewards Pending ({len(p_rewards)})**")
+                for r in p_rewards:
+                    with st.container(border=True):
+                        st.write(f"Reward: {r['Title']} ({float(r['Cost']):g} pts)")
+                        c1, c2 = st.columns(2)
+                        if c1.button("Approve", key=f"app_r_{r['ID']}"):
+                            update_status("Rewards", r['ID'], "Approved", 4)
+                            st.rerun()
+                        if c2.button("Reject", key=f"rej_r_{r['ID']}"):
+                            update_status("Rewards", r['ID'], "Rejected", 4)
+                            st.rerun()
+
+            if not p_tasks and not p_rewards:
                 st.info("No pending approvals.")
 
             st.divider()
