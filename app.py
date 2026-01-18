@@ -6,10 +6,12 @@ from datetime import datetime, timedelta
 import time
 import random
 import extra_streamlit_components as stx
+import re
 
 # --- CONFIGURATION ---
 SHEET_NAME = "Khanna Family App DB"
 GLOBAL_GOAL_TARGET_DEFAULT = 2000 
+GLOBAL_GOAL_TITLE_DEFAULT = "Water Park Trip"
 
 # --- GOOGLE SHEETS CONNECTION ---
 @st.cache_resource
@@ -23,9 +25,14 @@ def get_connection():
     return gspread.authorize(creds).open(SHEET_NAME)
 
 # --- DATA FUNCTIONS ---
+def clean_header(header):
+    # Removes (A), (B) and extra spaces to standardize keys
+    # "Role (B)" -> "Role"
+    header = re.sub(r'\s*\([A-Z]\)', '', header)
+    return header.strip()
+
 def load_data():
     sh = get_connection()
-    # Fetch all necessary sheets
     ranges = ['Tasks!A:Z', 'Rewards!A:Z', 'History!A:Z', 'Users!A:Z', 'Settings!A:Z']
     results = sh.values_batch_get(ranges)
     
@@ -33,9 +40,9 @@ def load_data():
         rows = results['valueRanges'][index].get('values', [])
         if not rows: return []
         headers = rows[0]
-        # Clean headers: remove spaces
-        headers = [h.strip() for h in headers]
-        return [dict(zip(headers, row)) for row in rows[1:]]
+        # Clean headers dynamically
+        cleaned_headers = [clean_header(h) for h in headers]
+        return [dict(zip(cleaned_headers, row)) for row in rows[1:]]
 
     tasks = get_df(0)
     rewards = get_df(1)
@@ -45,14 +52,14 @@ def load_data():
     
     users_dict = {}
     for row in users_list:
-        # SAFETY CHECK: If Name or Role is missing, skip this row
         if not row.get('Name'): continue
         
-        # Safe Getters (prevents crashing if column is missing)
-        role = row.get('Role', 'Kid') # Default to Kid if missing
+        # Robust Role Check (handles "Admin", "admin", "Admin ")
+        role_raw = row.get('Role', 'Kid')
+        role = role_raw.strip().lower() # Converts to 'admin' or 'kid'
+        
         pin = str(row.get('Pin', '0000'))
         
-        # Number conversion safety
         try: pts = float(row.get('Points', 0))
         except: pts = 0.0
             
@@ -63,7 +70,7 @@ def load_data():
         except: streak = 0
         
         users_dict[row['Name']] = {
-            'role': role, 
+            'role': role, # stored as lowercase 'admin'
             'pin': pin,
             'points': pts,
             'xp': xp,
@@ -80,7 +87,21 @@ def load_data():
             
     return {"tasks": tasks, "rewards": rewards, "history": history, "users": users_dict, "settings": settings_dict}
 
-# --- GAMIFICATION LOGIC ---
+# --- LOGIC & UPDATES ---
+def update_setting(key, value):
+    sh = get_connection()
+    try:
+        ws = sh.worksheet("Settings")
+    except:
+        ws = sh.add_worksheet(title="Settings", rows=10, cols=2)
+        ws.append_row(["Setting", "Value"])
+        
+    try:
+        cell = ws.find(key, in_column=1)
+        ws.update_cell(cell.row, 2, value)
+    except:
+        ws.append_row([key, value])
+
 def calculate_level(xp):
     if xp <= 0: return 1, "Rookie 🌱"
     level = int((xp ** 0.5) / 2) + 1
@@ -96,10 +117,11 @@ def update_user_stats(user, points_change, xp_change):
     sh = get_connection()
     ws = sh.worksheet("Users")
     cell = ws.find(user, in_column=1)
-    
     current_values = ws.row_values(cell.row)
     
-    # Safe parsing of current values
+    # Indices might shift if header has (A), (B), but GSpread creates 1-based index
+    # Assuming standard order: Name, Role, Pin, Points, Streak, Last_Active, Badges, XP
+    
     try: old_points = float(current_values[3])
     except: old_points = 0.0
     
@@ -113,8 +135,8 @@ def update_user_stats(user, points_change, xp_change):
 
     new_points = old_points + points_change
     new_xp = old_xp + xp_change
-    
     new_streak = old_streak
+    
     today_str = datetime.now().strftime("%Y-%m-%d")
     
     if xp_change > 0:
@@ -126,19 +148,13 @@ def update_user_stats(user, points_change, xp_change):
             new_streak = 1
         ws.update_cell(cell.row, 6, today_str)
 
-    # Update columns D(4), E(5), H(8)
     ws.update_cell(cell.row, 4, new_points)
     ws.update_cell(cell.row, 5, new_streak)
     ws.update_cell(cell.row, 8, new_xp)
     
     if points_change > 0:
-        try:
-            ws_set = sh.worksheet("Settings")
-            g_cell = ws_set.find("Family_Goal_Current", in_column=1)
-            cur_global = float(ws_set.cell(g_cell.row, 2).value)
-            ws_set.update_cell(g_cell.row, 2, cur_global + points_change)
-        except:
-            pass 
+        update_setting("Family_Goal_Current", 
+                       load_data()['settings'].get('Family_Goal_Current', 0) + points_change)
 
 def add_entry(sheet_name, data_list):
     sh = get_connection()
@@ -150,12 +166,6 @@ def update_status(sheet_name, item_id, new_status, status_col_index):
     ws = sh.worksheet(sheet_name)
     cell = ws.find(str(item_id), in_column=1)
     ws.update_cell(cell.row, status_col_index, new_status)
-
-def delete_entry(sheet_name, item_id):
-    sh = get_connection()
-    ws = sh.worksheet(sheet_name)
-    cell = ws.find(str(item_id), in_column=1)
-    ws.delete_rows(cell.row)
 
 def log_history(user, action, item, points_change):
     sh = get_connection()
@@ -181,8 +191,6 @@ def main():
             background-color: #262730; border: 1px solid #464b59; border-radius: 10px; padding: 15px; text-align: center; margin-bottom: 10px;
         }
         .active-card { border: 2px solid #ff4b4b; background-color: #362022; }
-        .stat-value { font-size: 1.5rem; font-weight: bold; margin: 0; }
-        .stat-label { font-size: 0.9rem; color: #ccc; margin: 0; }
         .stProgress > div > div > div > div { background-color: #00d4ff; }
         </style>
         """, unsafe_allow_html=True)
@@ -213,22 +221,18 @@ def main():
         user_select = st.selectbox("Select Your Hero", valid_users)
         pin_input = st.text_input("Secret Code", type="password")
         if st.button("Enter Realm", type="primary"):
-            # Check if Pin exists
             correct_pin = str(data['users'][user_select]['pin'])
             if pin_input == correct_pin:
                 st.session_state['authenticated'] = True
                 st.session_state['user'] = user_select
-                expires = datetime.now() + timedelta(days=30)
-                cookie_manager.set("active_user", user_select, expires_at=expires)
-                st.balloons()
-                st.rerun()
-            else:
-                st.error("Wrong PIN!")
+                cookie_manager.set("active_user", user_select, expires_at=datetime.now() + timedelta(days=30))
+                st.balloons(); st.rerun()
+            else: st.error("Wrong PIN!")
         return
 
     user = st.session_state['user']
     user_data = data['users'][user]
-    role = user_data['role']
+    role = user_data['role'] # This is now safely 'admin' or 'kid'
     
     level, title = calculate_level(user_data['xp'])
     prev_threshold = ((level - 1) * 2) ** 2 if level > 1 else 0
@@ -241,9 +245,7 @@ def main():
     c1.caption(f"**{title}** (Lvl {level})")
     if c2.button("Logout"):
         cookie_manager.delete("active_user")
-        st.session_state['authenticated'] = False
-        st.session_state['user'] = None
-        st.rerun()
+        st.session_state['authenticated'] = False; st.session_state['user'] = None; st.rerun()
     
     st.write(f"**XP Progress:** {int(user_data['xp'])} / {int(next_threshold)}")
     st.progress(xp_progress)
@@ -252,9 +254,12 @@ def main():
     k2.metric("🔥 Streak", f"{user_data['streak']} Days")
     
     st.divider()
+    # LOAD GLOBAL GOAL FROM SETTINGS
     g_current = data['settings'].get('Family_Goal_Current', 0)
     g_target = data['settings'].get('Family_Goal_Target', GLOBAL_GOAL_TARGET_DEFAULT)
-    st.write(f"### 🌍 Family Goal: Water Park Trip!")
+    g_title = data['settings'].get('Family_Goal_Title', GLOBAL_GOAL_TITLE_DEFAULT)
+    
+    st.write(f"### 🌍 Family Goal: {g_title}")
     st.progress(min(g_current / g_target, 1.0))
     st.caption(f"{int(g_current)} / {int(g_target)} pts")
 
@@ -280,10 +285,7 @@ def main():
                     update_user_stats(user, final_points, final_points)
                     log_history(user, "Quest Complete", task['Title'], f"+{final_points:g}")
                     if task['Frequency'] == "One-time": update_status("Tasks", task['ID'], "Completed", 6)
-                    st.balloons()
-                    st.toast(f"Completed! +{final_points:g} Gold & XP")
-                    time.sleep(1.5)
-                    st.rerun()
+                    st.balloons(); st.toast(f"Completed! +{final_points:g} Gold & XP"); time.sleep(1.5); st.rerun()
 
     with tab2:
         st.subheader("Marketplace")
@@ -324,13 +326,48 @@ def main():
             </div></div>""", unsafe_allow_html=True)
 
     with tab4:
-        if role == "admin":
-            st.write("### 🛡️ Admin")
-            for t in [t for t in data['tasks'] if t['Status'] == "Pending Approval"]:
-                c1, c2, c3 = st.columns([2, 1, 1])
-                c1.write(f"{t['Title']} ({t['Points']} pts)")
-                if c2.button("✅", key=f"at_{t['ID']}"): update_status("Tasks", t['ID'], "Active", 6); st.rerun()
-                if c3.button("❌", key=f"rt_{t['ID']}"): update_status("Tasks", t['ID'], "Rejected", 6); st.rerun()
+        # UPDATED ADMIN CHECK: Case-insensitive
+        if role == "admin": 
+            st.write("### 🛡️ Admin Controls")
+            
+            # --- NEW: FAMILY GOAL SETTINGS ---
+            with st.container(border=True):
+                st.write("#### 🌍 Family Goal Settings")
+                c_goal, c_target, c_save = st.columns([2, 1, 1])
+                
+                # Fetch current values to populate inputs
+                current_title = data['settings'].get('Family_Goal_Title', GLOBAL_GOAL_TITLE_DEFAULT)
+                current_target = data['settings'].get('Family_Goal_Target', GLOBAL_GOAL_TARGET_DEFAULT)
+                
+                new_title = c_goal.text_input("Goal Reward Name", value=current_title)
+                new_target = c_target.number_input("Target Points", value=float(current_target))
+                
+                if c_save.button("Update Goal"):
+                    update_setting("Family_Goal_Title", new_title)
+                    update_setting("Family_Goal_Target", new_target)
+                    st.success("Goal Updated!")
+                    time.sleep(1); st.rerun()
+
+            st.divider()
+            
+            # PENDING APPROVALS
+            p_tasks = [t for t in data['tasks'] if t['Status'] == "Pending Approval"]
+            p_rewards = [r for r in data['rewards'] if r['Status'] == "Pending Approval"]
+            
+            if p_tasks or p_rewards:
+                st.write("#### ⏳ Pending Approvals")
+                for t in p_tasks:
+                    c1, c2, c3 = st.columns([2, 1, 1])
+                    c1.write(f"Task: {t['Title']} ({t['Points']} pts)")
+                    if c2.button("✅", key=f"at_{t['ID']}"): update_status("Tasks", t['ID'], "Active", 6); st.rerun()
+                    if c3.button("❌", key=f"rt_{t['ID']}"): update_status("Tasks", t['ID'], "Rejected", 6); st.rerun()
+                for r in p_rewards:
+                    c1, c2, c3 = st.columns([2, 1, 1])
+                    c1.write(f"Reward: {r['Title']} ({r['Cost']} pts)")
+                    if c2.button("✅", key=f"apr_{r['ID']}"): update_status("Rewards", r['ID'], "Approved", 4); st.rerun()
+                    if c3.button("❌", key=f"rjr_{r['ID']}"): update_status("Rewards", r['ID'], "Rejected", 4); st.rerun()
+            else: st.info("No pending items.")
+            
             st.divider()
             with st.expander("➕ Create Task"):
                 tt = st.text_input("Title"); tp = st.number_input("Points", min_value=1.0)
@@ -338,8 +375,8 @@ def main():
                 if st.button("Create"):
                     add_entry("Tasks", [int(datetime.now().timestamp()), tt, tp, ta, "One-time", "Active"])
                     st.success("Created!"); time.sleep(1); st.rerun()
-            st.divider(); st.write("History"); st.dataframe(pd.DataFrame(data['history']).tail(10).iloc[::-1], use_container_width=True, hide_index=True)
-        else: st.warning("Restricted")
+        else:
+            st.warning(f"Restricted Area. You are logged in as role: '{role}'")
 
 if __name__ == "__main__":
     main()
