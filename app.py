@@ -26,7 +26,9 @@ def get_connection():
 
 # --- DATA FUNCTIONS ---
 def clean_header(header):
-    header = re.sub(r'\s*\([A-Z]\)', '', header)
+    # Removes (A), (B) and extra spaces
+    if not header: return "Unknown"
+    header = re.sub(r'\s*\([A-Z]\)', '', str(header))
     return header.strip()
 
 def load_data():
@@ -53,6 +55,7 @@ def load_data():
         role_raw = row.get('Role', 'Kid')
         role = role_raw.strip().lower()
         pin = str(row.get('Pin', '0000'))
+        
         try: pts = float(row.get('Points', 0))
         except: pts = 0.0
         try: xp = float(row.get('XP', 0))
@@ -109,6 +112,7 @@ def recalculate_all_xp():
                 val = float(points_str)
                 if val > 0: user_xp_totals[user] = user_xp_totals.get(user, 0) + val
             except: continue
+            
     sh = get_connection()
     ws = sh.worksheet("Users")
     all_values = ws.get_all_values()
@@ -118,10 +122,14 @@ def recalculate_all_xp():
         clean_h = clean_header(h).lower()
         if clean_h == 'name': name_col_idx = i
         if clean_h == 'xp': xp_col_idx = i
-    if name_col_idx == -1 or xp_col_idx == -1: return False, "Missing Name or XP column"
+        
+    if name_col_idx == -1 or xp_col_idx == -1: return False, "Missing Name or XP column in Users sheet"
+    
     updates_made = 0
     for i, row in enumerate(all_values):
         if i == 0: continue
+        if len(row) <= name_col_idx: continue
+        
         name = row[name_col_idx]
         if name in user_xp_totals:
             ws.update_cell(i + 1, xp_col_idx + 1, user_xp_totals[name])
@@ -140,18 +148,23 @@ def update_user_stats(user, points_change, xp_change):
     last_active_str = current_values[5] if len(current_values) > 5 else ""
     try: old_xp = float(current_values[7])
     except: old_xp = 0.0
+    
     new_points = old_points + points_change
     new_xp = old_xp + xp_change
     new_streak = old_streak
+    
     today_str = datetime.now().strftime("%Y-%m-%d")
+    
     if xp_change > 0:
         if last_active_str == today_str: new_streak = old_streak
         elif last_active_str == (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d"): new_streak = old_streak + 1
         else: new_streak = 1
         ws.update_cell(cell.row, 6, today_str)
+        
     ws.update_cell(cell.row, 4, new_points)
     ws.update_cell(cell.row, 5, new_streak)
     ws.update_cell(cell.row, 8, new_xp)
+    
     if points_change > 0:
         update_setting("Family_Goal_Current", load_data()['settings'].get('Family_Goal_Current', 0) + points_change)
 
@@ -186,20 +199,22 @@ def check_if_task_done_today(task_title, user, history_data, frequency):
         h_item = row.get('Item') or row.get('item')
         h_date_str = row.get('Date') or row.get('date')
         
-        if h_user == user and h_item == task_title:
+        if h_user == user and h_item == task_title and h_date_str:
             try:
+                # Handle potential format differences
                 h_dt = datetime.strptime(h_date_str, "%Y-%m-%d %H:%M")
                 if h_dt.date() == today:
                     count_today += 1
                     if h_dt.hour >= 16: done_pm = True
                     else: done_am = True
-            except: continue
+            except:
+                continue
 
     if frequency == "Daily":
-        return count_today > 0 # Hide if done once
+        return count_today > 0 
     if frequency == "Twice Daily":
-        if is_pm_now: return done_pm # If PM, hide only if PM done
-        else: return done_am # If AM, hide only if AM done
+        if is_pm_now: return done_pm 
+        else: return done_am 
             
     return False
 
@@ -210,6 +225,7 @@ def get_login_manager():
 def main():
     st.set_page_config(page_title="Khanna Family Quest", page_icon="🛡️", layout="centered")
     
+    # CSS
     st.markdown("""
         <style>
         div.stButton > button { width: 100%; border-radius: 8px; font-weight: bold; height: 2.5em !important; padding: 0px 10px; }
@@ -227,8 +243,12 @@ def main():
         </style>
         """, unsafe_allow_html=True)
 
-    try: data = load_data()
-    except Exception as e: st.error(f"⚠️ Database Error: {e}"); st.stop()
+    # Safety Try/Except Block to prevent blank screens
+    try:
+        data = load_data()
+    except Exception as e:
+        st.error(f"⚠️ Database Error: {e}")
+        st.stop()
 
     cookie_manager = get_login_manager()
     if 'authenticated' not in st.session_state: st.session_state['authenticated'] = False; st.session_state['user'] = None
@@ -254,6 +274,7 @@ def main():
             else: st.error("Wrong PIN!")
         return
 
+    # Logged In
     user = st.session_state['user']
     user_data = data['users'][user]
     role = user_data['role']
@@ -297,10 +318,11 @@ def main():
         visible_tasks = []
         for t in data['tasks']:
             assignees = str(t.get('Assignee', 'Any'))
-            if t['Status'] == "Active" and ("Any" in assignees or user in assignees):
-                # Safe Frequency Check
+            status = t.get('Status', 'Active') # Safe Get
+            
+            if status == "Active" and ("Any" in assignees or user in assignees):
                 freq = t.get('Frequency', 'One-time')
-                is_hidden = check_if_task_done_today(t['Title'], user, data['history'], freq)
+                is_hidden = check_if_task_done_today(t.get('Title'), user, data['history'], freq)
                 if not is_hidden:
                     visible_tasks.append(t)
 
@@ -309,22 +331,22 @@ def main():
         for task in visible_tasks:
             with st.container(border=True):
                 c_text, c_btn = st.columns([3, 1])
-                base_points = float(task['Points'])
+                base_points = float(task.get('Points', 0))
                 freq_icon = "🔄" if task.get('Frequency') in ["Daily", "Twice Daily"] else "🔹"
-                c_text.write(f"**{task['Title']}**")
+                c_text.write(f"**{task.get('Title', 'Unknown')}**")
                 c_text.caption(f"{freq_icon} {task.get('Frequency', 'One-time')} • {base_points} pts")
                 
-                if c_btn.button("Done", key=f"btn_{task['ID']}", type="primary"):
+                if c_btn.button("Done", key=f"btn_{task.get('ID', 999)}", type="primary"):
                     multiplier = 1.0
                     if user_data['streak'] >= 7: multiplier = 1.5
                     elif user_data['streak'] >= 3: multiplier = 1.2
                     final_points = base_points * multiplier
 
                     update_user_stats(user, final_points, final_points)
-                    log_history(user, "Quest Complete", task['Title'], f"+{final_points:g}")
+                    log_history(user, "Quest Complete", task.get('Title'), f"+{final_points:g}")
                     
                     if task.get('Frequency') == "One-time":
-                        update_status("Tasks", task['ID'], "Completed", 6)
+                        update_status("Tasks", task.get('ID'), "Completed", 6)
                     
                     st.balloons()
                     st.toast(f"Nice! +{final_points:g} Gold")
@@ -361,14 +383,14 @@ def main():
                 else: st.info(f"Won {prize}.")
                 time.sleep(2); st.rerun()
         st.divider()
-        for reward in [r for r in data['rewards'] if r['Status'] == "Approved"]:
+        for reward in [r for r in data['rewards'] if r.get('Status') == "Approved"]:
             with st.container(border=True):
                 c1, c2 = st.columns([3, 1])
-                cost = float(reward['Cost'])
-                c1.write(f"**{reward['Title']}** ({cost:g} pts)")
-                if c2.button("Buy", key=f"buy_{reward['ID']}", disabled=user_data['points'] < cost):
+                cost = float(reward.get('Cost', 0))
+                c1.write(f"**{reward.get('Title')}** ({cost:g} pts)")
+                if c2.button("Buy", key=f"buy_{reward.get('ID')}", disabled=user_data['points'] < cost):
                     update_user_stats(user, -cost, 0)
-                    log_history(user, "Reward", reward['Title'], f"-{cost:g}")
+                    log_history(user, "Reward", reward.get('Title'), f"-{cost:g}")
                     st.snow(); st.toast("Redeemed!"); time.sleep(1); st.rerun()
         with st.expander("Request New Reward"):
             with st.form("new_reward"):
@@ -414,16 +436,11 @@ def main():
                     st.success("Goal Updated!"); time.sleep(1); st.rerun()
 
             st.divider()
-            p_tasks = [t for t in data['tasks'] if t['Status'] == "Pending Approval"]
-            p_rewards = [r for r in data['rewards'] if r['Status'] == "Pending Approval"]
+            p_tasks = [t for t in data['tasks'] if t.get('Status') == "Pending Approval"]
+            p_rewards = [r for r in data['rewards'] if r.get('Status') == "Pending Approval"]
             if p_tasks or p_rewards:
                 st.write("#### ⏳ Pending Approvals")
                 for t in p_tasks:
                     c1, c2, c3 = st.columns([2, 1, 1])
-                    c1.write(f"Task: {t['Title']} ({t['Points']} pts)")
-                    if c2.button("✅", key=f"at_{t['ID']}"): update_status("Tasks", t['ID'], "Active", 6); st.rerun()
-                    if c3.button("❌", key=f"rt_{t['ID']}"): update_status("Tasks", t['ID'], "Rejected", 6); st.rerun()
-                for r in p_rewards:
-                    c1, c2, c3 = st.columns([2, 1, 1])
-                    c1.write(f"Reward: {r['Title']} ({r['Cost']} pts)")
-                    if c2.button("✅", key=f"apr_{r['ID']}"): update_sta
+                    c1.write(f"Task: {t.get('Title')} ({t.get('Points')} pts)")
+                    if c2.button(
