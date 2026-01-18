@@ -26,7 +26,6 @@ def get_connection():
 
 # --- DATA FUNCTIONS ---
 def clean_header(header):
-    # Removes (A), (B) and extra spaces
     if not header: return "Unknown"
     header = re.sub(r'\s*\([A-Z]\)', '', str(header))
     return header.strip()
@@ -201,7 +200,6 @@ def check_if_task_done_today(task_title, user, history_data, frequency):
         
         if h_user == user and h_item == task_title and h_date_str:
             try:
-                # Handle potential format differences
                 h_dt = datetime.strptime(h_date_str, "%Y-%m-%d %H:%M")
                 if h_dt.date() == today:
                     count_today += 1
@@ -243,7 +241,6 @@ def main():
         </style>
         """, unsafe_allow_html=True)
 
-    # Safety Try/Except Block to prevent blank screens
     try:
         data = load_data()
     except Exception as e:
@@ -336,7 +333,9 @@ def main():
                 c_text.write(f"**{task.get('Title', 'Unknown')}**")
                 c_text.caption(f"{freq_icon} {task.get('Frequency', 'One-time')} • {base_points} pts")
                 
-                if c_btn.button("Done", key=f"btn_{task.get('ID', 999)}", type="primary"):
+                # Using a safe key get method
+                task_id = task.get('ID', random.randint(1000, 9999))
+                if c_btn.button("Done", key=f"btn_{task_id}", type="primary"):
                     multiplier = 1.0
                     if user_data['streak'] >= 7: multiplier = 1.5
                     elif user_data['streak'] >= 3: multiplier = 1.2
@@ -346,7 +345,7 @@ def main():
                     log_history(user, "Quest Complete", task.get('Title'), f"+{final_points:g}")
                     
                     if task.get('Frequency') == "One-time":
-                        update_status("Tasks", task.get('ID'), "Completed", 6)
+                        update_status("Tasks", task_id, "Completed", 6)
                     
                     st.balloons()
                     st.toast(f"Nice! +{final_points:g} Gold")
@@ -388,10 +387,16 @@ def main():
                 c1, c2 = st.columns([3, 1])
                 cost = float(reward.get('Cost', 0))
                 c1.write(f"**{reward.get('Title')}** ({cost:g} pts)")
-                if c2.button("Buy", key=f"buy_{reward.get('ID')}", disabled=user_data['points'] < cost):
+                # SAFE KEY GENERATION AND SYNTAX FIX
+                rew_id = reward.get('ID', random.randint(10000, 99999))
+                if c2.button("Buy", key=f"buy_{rew_id}", disabled=user_data['points'] < cost):
                     update_user_stats(user, -cost, 0)
                     log_history(user, "Reward", reward.get('Title'), f"-{cost:g}")
-                    st.snow(); st.toast("Redeemed!"); time.sleep(1); st.rerun()
+                    st.snow()
+                    st.toast("Redeemed!")
+                    time.sleep(1)
+                    st.rerun()
+
         with st.expander("Request New Reward"):
             with st.form("new_reward"):
                 rt = st.text_input("Name"); rc = st.number_input("Cost", min_value=1.0)
@@ -443,4 +448,35 @@ def main():
                 for t in p_tasks:
                     c1, c2, c3 = st.columns([2, 1, 1])
                     c1.write(f"Task: {t.get('Title')} ({t.get('Points')} pts)")
-                    if c2.button(
+                    if c2.button("✅", key=f"at_{t.get('ID')}"): 
+                        update_status("Tasks", t.get('ID'), "Active", 6); st.rerun()
+                    if c3.button("❌", key=f"rt_{t.get('ID')}"): 
+                        update_status("Tasks", t.get('ID'), "Rejected", 6); st.rerun()
+                for r in p_rewards:
+                    c1, c2, c3 = st.columns([2,1, 1])
+                    c1.write(f"Reward: {r.get('Title')} ({r.get('Cost')} pts)")
+                    if c2.button("✅", key=f"apr_{r.get('ID')}"): 
+                        update_status("Rewards", r.get('ID'), "Approved", 4); st.rerun()
+                    if c3.button("❌", key=f"rjr_{r.get('ID')}"): 
+                        update_status("Rewards", r.get('ID'), "Rejected", 4); st.rerun()
+            else: st.info("No pending items.")
+            
+            st.divider()
+            with st.expander("➕ Create Task (Admin)"):
+                tt = st.text_input("Title")
+                tp = st.number_input("Points", min_value=1.0)
+                tf = st.selectbox("Frequency", ["One-time", "Daily", "Twice Daily"], index=0)
+                admin_all_users = ["Any"] + list(data['users'].keys())
+                ta_list = st.multiselect("Assignee(s)", admin_all_users, default=["Any"])
+                
+                if st.button("Create"):
+                    if not tt: st.error("Name required")
+                    else:
+                        ta_str = ", ".join(ta_list) if ta_list else "Any"
+                        add_entry("Tasks", [int(datetime.now().timestamp()), tt, tp, ta_str, tf, "Active"])
+                        st.success("Created!"); time.sleep(1); st.rerun()
+        else:
+            st.warning(f"Restricted Area. You are logged in as role: '{role}'")
+
+if __name__ == "__main__":
+    main()
