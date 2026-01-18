@@ -220,12 +220,9 @@ def main():
     with tab1:
         st.subheader("To-Do List")
         
-        # --- NEW FILTERING LOGIC ---
-        # We need to check if the user is in the "Assignee" string (e.g., "Raghav, Rhea")
-        # or if it is assigned to "Any"
         my_tasks = []
         for t in data['tasks']:
-            assignees = str(t['Assignee']) # Convert to string to be safe
+            assignees = str(t['Assignee']) 
             if t['Status'] == "Active":
                 if "Any" in assignees or user in assignees:
                     my_tasks.append(t)
@@ -237,7 +234,6 @@ def main():
             with st.container(border=True):
                 c_text, c_btn = st.columns([3, 1])
                 
-                # Visual Indicator: Is this a group task?
                 assignee_display = task['Assignee']
                 if "," in assignee_display:
                     assignee_display = "Shared Task"
@@ -266,20 +262,16 @@ def main():
         st.divider()
         with st.expander("➕ Suggest New Task"):
             with st.form("new_task_form"):
-                
-                # --- NEW MULTI-SELECT ASSIGNMENT ---
-                assignee_str = user # Default for kids
+                assignee_str = user 
                 
                 if role == "admin":
                     all_members = ["Any"] + family_members
-                    # Multi-select returns a list: ['Raghav', 'Rhea']
                     selected_assignees = st.multiselect("Who is this task for?", all_members, default=["Any"])
                     
-                    # Convert list to string for Google Sheets: "Raghav, Rhea"
                     if not selected_assignees:
-                        assignee_str = "Any" # Fallback
+                        assignee_str = "Any"
                     elif "Any" in selected_assignees:
-                        assignee_str = "Any" # Any overrides others
+                        assignee_str = "Any"
                     else:
                         assignee_str = ", ".join(selected_assignees)
                 else:
@@ -345,9 +337,13 @@ def main():
                         c1, c2 = st.columns(2)
                         if c1.button("Approve", key=f"app_t_{t['ID']}"):
                             update_status("Tasks", t['ID'], "Active", 6)
+                            st.toast("Approved!")
+                            time.sleep(1.5) # Wait for Google to save
                             st.rerun()
                         if c2.button("Reject", key=f"rej_t_{t['ID']}"):
                             update_status("Tasks", t['ID'], "Rejected", 6)
+                            st.toast("Rejected!")
+                            time.sleep(1.5) # Wait for Google to save
                             st.rerun()
             if p_rewards:
                 st.divider()
@@ -358,9 +354,13 @@ def main():
                         c1, c2 = st.columns(2)
                         if c1.button("Approve", key=f"app_r_{r['ID']}"):
                             update_status("Rewards", r['ID'], "Approved", 4)
+                            st.toast("Approved!")
+                            time.sleep(1.5) # Wait for Google to save
                             st.rerun()
                         if c2.button("Reject", key=f"rej_r_{r['ID']}"):
                             update_status("Rewards", r['ID'], "Rejected", 4)
+                            st.toast("Rejected!")
+                            time.sleep(1.5) # Wait for Google to save
                             st.rerun()
             if not p_tasks and not p_rewards:
                 st.info("No pending approvals.")
