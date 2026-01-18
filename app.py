@@ -26,7 +26,7 @@ def get_connection():
 
 # --- DATA FUNCTIONS ---
 def clean_header(header):
-    header = re.sub(r'\s*\([A-Z]\)', '', header) # Removes (A), (B) etc
+    header = re.sub(r'\s*\([A-Z]\)', '', header)
     return header.strip()
 
 def load_data():
@@ -99,60 +99,34 @@ def calculate_level(xp):
     return level, title
 
 def recalculate_all_xp():
-    """Scans History to calculate total lifetime XP for all users."""
     data = load_data()
     history = data['history']
-    
-    # dictionary to hold totals: {'Prateek': 105.5, 'Rhea': 50.0}
     user_xp_totals = {}
-
     for row in history:
-        # Expected row keys: Date, User, Action, Item, Points_Change
-        # Adjust keys based on your actual history header names
-        user = row.get('User') or row.get('user') # Handle case sensitivity
+        user = row.get('User') or row.get('user')
         points_str = row.get('Points_Change') or row.get('Points Change') or row.get('points_change')
-        
         if user and points_str:
             try:
                 val = float(points_str)
-                # XP only counts positive gains (Tasks/Bonuses), not Spending
-                if val > 0:
-                    user_xp_totals[user] = user_xp_totals.get(user, 0) + val
-            except:
-                continue
-
-    # Now update the Users Sheet
+                if val > 0: user_xp_totals[user] = user_xp_totals.get(user, 0) + val
+            except: continue
     sh = get_connection()
     ws = sh.worksheet("Users")
-    
-    # Iterate through users in sheet to find their row
     all_values = ws.get_all_values()
     headers = all_values[0]
-    
-    # Find column index for 'Name' and 'XP'
-    # Headers might be "Name" or "Name (A)" depending on cleanup
-    name_col_idx = -1
-    xp_col_idx = -1
-    
+    name_col_idx = -1; xp_col_idx = -1
     for i, h in enumerate(headers):
         clean_h = clean_header(h).lower()
         if clean_h == 'name': name_col_idx = i
         if clean_h == 'xp': xp_col_idx = i
-        
-    if name_col_idx == -1 or xp_col_idx == -1:
-        return False, "Could not find 'Name' or 'XP' columns in Users sheet."
-
+    if name_col_idx == -1 or xp_col_idx == -1: return False, "Missing Name or XP column"
     updates_made = 0
     for i, row in enumerate(all_values):
-        if i == 0: continue # Skip header
-        
+        if i == 0: continue
         name = row[name_col_idx]
         if name in user_xp_totals:
-            new_xp = user_xp_totals[name]
-            # +1 because spreadsheet rows are 1-based
-            ws.update_cell(i + 1, xp_col_idx + 1, new_xp)
+            ws.update_cell(i + 1, xp_col_idx + 1, user_xp_totals[name])
             updates_made += 1
-            
     return True, f"Updated XP for {updates_made} users."
 
 def update_user_stats(user, points_change, xp_change):
@@ -160,7 +134,6 @@ def update_user_stats(user, points_change, xp_change):
     ws = sh.worksheet("Users")
     cell = ws.find(user, in_column=1)
     current_values = ws.row_values(cell.row)
-    
     try: old_points = float(current_values[3])
     except: old_points = 0.0
     try: old_streak = int(current_values[4])
@@ -168,29 +141,20 @@ def update_user_stats(user, points_change, xp_change):
     last_active_str = current_values[5] if len(current_values) > 5 else ""
     try: old_xp = float(current_values[7])
     except: old_xp = 0.0
-
     new_points = old_points + points_change
     new_xp = old_xp + xp_change
     new_streak = old_streak
-    
     today_str = datetime.now().strftime("%Y-%m-%d")
-    
     if xp_change > 0:
-        if last_active_str == today_str:
-            new_streak = old_streak
-        elif last_active_str == (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d"):
-            new_streak = old_streak + 1
-        else:
-            new_streak = 1
+        if last_active_str == today_str: new_streak = old_streak
+        elif last_active_str == (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d"): new_streak = old_streak + 1
+        else: new_streak = 1
         ws.update_cell(cell.row, 6, today_str)
-
     ws.update_cell(cell.row, 4, new_points)
     ws.update_cell(cell.row, 5, new_streak)
     ws.update_cell(cell.row, 8, new_xp)
-    
     if points_change > 0:
-        update_setting("Family_Goal_Current", 
-                       load_data()['settings'].get('Family_Goal_Current', 0) + points_change)
+        update_setting("Family_Goal_Current", load_data()['settings'].get('Family_Goal_Current', 0) + points_change)
 
 def add_entry(sheet_name, data_list):
     sh = get_connection()
@@ -233,10 +197,8 @@ def main():
         </style>
         """, unsafe_allow_html=True)
 
-    try:
-        data = load_data()
-    except Exception as e:
-        st.error(f"⚠️ Database Error: {e}"); st.stop()
+    try: data = load_data()
+    except Exception as e: st.error(f"⚠️ Database Error: {e}"); st.stop()
 
     cookie_manager = get_login_manager()
     if 'authenticated' not in st.session_state: st.session_state['authenticated'] = False; st.session_state['user'] = None
@@ -320,6 +282,29 @@ def main():
                     if task['Frequency'] == "One-time": update_status("Tasks", task['ID'], "Completed", 6)
                     st.balloons(); st.toast(f"Completed! +{final_points:g} Gold & XP"); time.sleep(1.5); st.rerun()
 
+        # --- SUGGEST NEW TASK (MOVED HERE) ---
+        st.divider()
+        with st.expander("💡 Propose a New Quest"):
+            st.caption("Suggest a chore you want to do for points! Parents must approve it first.")
+            with st.form("suggest_task_form"):
+                s_title = st.text_input("Quest Name (e.g. Wash Car)")
+                s_pts = st.number_input("Points Request", min_value=1.0, step=0.5)
+                # Assignee Selector (Defaults to current user)
+                all_users = ["Any"] + list(data['users'].keys())
+                s_assignees = st.multiselect("Who is this for?", all_users, default=[user])
+                
+                if st.form_submit_button("Submit Proposal"):
+                    if not s_title:
+                        st.error("Please enter a name.")
+                    else:
+                        # Join list into string "Rhea, Prateek"
+                        assignee_str = ", ".join(s_assignees) if s_assignees else "Any"
+                        nid = int(datetime.now().timestamp())
+                        # Status is "Pending Approval"
+                        add_entry("Tasks", [nid, s_title, s_pts, assignee_str, "One-time", "Pending Approval"])
+                        st.success("Sent to parents for approval!")
+                        time.sleep(1); st.rerun()
+
     with tab2:
         st.subheader("Marketplace")
         with st.container(border=True):
@@ -362,10 +347,8 @@ def main():
         if role == "admin": 
             st.write("### 🛡️ Admin Controls")
             
-            # --- XP SYNC BUTTON ---
             with st.container(border=True):
                 st.write("#### 🔧 Maintenance")
-                st.info("Click this if XP looks wrong. It will look at History and recalculate total XP.")
                 if st.button("🔄 Sync XP from History"):
                     with st.spinner("Crunching numbers..."):
                         success, msg = recalculate_all_xp()
@@ -404,12 +387,19 @@ def main():
             else: st.info("No pending items.")
             
             st.divider()
-            with st.expander("➕ Create Task"):
-                tt = st.text_input("Title"); tp = st.number_input("Points", min_value=1.0)
-                ta = st.text_input("Assignee", value="Any")
+            with st.expander("➕ Create Task (Admin)"):
+                tt = st.text_input("Title")
+                tp = st.number_input("Points", min_value=1.0)
+                # MULTI-SELECT FOR ADMIN TOO
+                admin_all_users = ["Any"] + list(data['users'].keys())
+                ta_list = st.multiselect("Assignee(s)", admin_all_users, default=["Any"])
+                
                 if st.button("Create"):
-                    add_entry("Tasks", [int(datetime.now().timestamp()), tt, tp, ta, "One-time", "Active"])
-                    st.success("Created!"); time.sleep(1); st.rerun()
+                    if not tt: st.error("Name required")
+                    else:
+                        ta_str = ", ".join(ta_list) if ta_list else "Any"
+                        add_entry("Tasks", [int(datetime.now().timestamp()), tt, tp, ta_str, "One-time", "Active"])
+                        st.success("Created!"); time.sleep(1); st.rerun()
         else:
             st.warning(f"Restricted Area. You are logged in as role: '{role}'")
 
