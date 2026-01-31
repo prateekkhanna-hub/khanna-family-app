@@ -13,8 +13,6 @@ SHEET_NAME = "Khanna Family App DB"
 SCOPE = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
 
 # --- BACKEND ---
-# REMOVED: get_manager() function causing the warning
-
 @st.cache_resource
 def get_sh():
     try: creds = Credentials.from_service_account_info(dict(st.secrets["gcp_service_account"]), scopes=SCOPE)
@@ -104,13 +102,27 @@ def buy_reward(user, r, u_dat):
     except Exception as e:
         st.error(f"Error: {e}")
 
+# --- NEW: POP-UP MODAL ---
+@st.dialog("💡 Propose New Quest")
+def propose_quest_modal(user):
+    with st.form("new_q_modal"):
+        st.write("Suggest a task to the Admins.")
+        new_t = st.text_input("Quest Title")
+        pts = st.number_input("Suggested Points", min_value=1.0, value=10.0)
+        if st.form_submit_button("Submit Proposal"):
+            ws_t = get_sh().worksheet("Tasks")
+            ws_t.append_row([int(time.time()), new_t, pts, user, "One-time", "Pending Approval"])
+            st.success("Sent for approval!")
+            time.sleep(1)
+            st.rerun()
+
 # --- UI ---
 def main():
-    st.set_page_config(page_title="Khanna Family Quest", page_icon="🛡️", layout="centered")
+    st.set_page_config(page_title="Khanna Family Quest", page_icon="🛡️", layout="wide") # Layout wide for better sidebar use
     
     st.markdown("""<style>
         div.stButton > button { width: 100%; border-radius: 8px; font-weight: bold; height: 2.5em !important; }
-        .stat-box { background: #262730; border: 1px solid #464b59; border-radius: 10px; padding: 10px; text-align: center; color: white; }
+        .stat-box { background: #262730; border: 1px solid #464b59; border-radius: 10px; padding: 10px; text-align: center; color: white; margin-bottom: 10px;}
         .stat-val { font-size: 1.2rem; font-weight: bold; margin: 0; }
         .stat-lbl { font-size: 0.8rem; color: #aaa; margin: 0; }
         </style>""", unsafe_allow_html=True)
@@ -118,107 +130,129 @@ def main():
     try: dfs, settings = load_data()
     except Exception as e: st.error(f"DB Error: {e}"); st.stop()
 
-    # --- FIX: INITIALIZE MANAGER HERE (NOT CACHED) ---
     mgr = stx.CookieManager(key="auth_manager")
     auth_user = mgr.get("active_user")
 
-    if 'user' not in st.session_state:
-        st.session_state['user'] = None
+    if 'user' not in st.session_state: st.session_state['user'] = None
 
     if st.session_state['user'] is None and auth_user:
-        if auth_user in dfs['users'].index:
-            st.session_state['user'] = auth_user
-        else:
-            mgr.delete("active_user")
+        if auth_user in dfs['users'].index: st.session_state['user'] = auth_user
+        else: mgr.delete("active_user")
 
     if not st.session_state['user']:
         st.title("🛡️ Login")
         valid_users = dfs['users'].index.tolist() if not dfs['users'].empty else []
-        
         with st.form("login_form"):
             u = st.selectbox("Hero", valid_users) if valid_users else None
             pin = st.text_input("PIN", type="password")
-            submitted = st.form_submit_button("Enter", type="primary")
-            
-            if submitted and u:
-                real_pin = str(dfs['users'].loc[u].get('Pin', '0000')).strip()
-                if str(pin).strip() == real_pin:
+            if st.form_submit_button("Enter", type="primary") and u:
+                if str(pin).strip() == str(dfs['users'].loc[u].get('Pin', '0000')).strip():
                     st.session_state['user'] = u
                     mgr.set("active_user", u, expires_at=datetime.now() + timedelta(days=30))
-                    st.success("Welcome!")
-                    time.sleep(0.5)
-                    st.rerun()
-                else:
-                    st.error("Wrong PIN")
+                    st.success("Welcome!"); time.sleep(0.5); st.rerun()
+                else: st.error("Wrong PIN")
         return
 
-    # User Context
+    # --- FEATURE 1: SIDEBAR COMMAND CENTER ---
     user = st.session_state['user']
     u_dat = dfs['users'].loc[user]
     lvl, title = get_level(u_dat['XP'])
-    
-    c1, c2 = st.columns([3, 1])
-    c1.markdown(f"### {user} <small>({title})</small>", unsafe_allow_html=True)
-    if c2.button("Log out"): 
-        mgr.delete("active_user")
-        st.session_state['user'] = None
-        st.rerun()
 
-    cols = st.columns(3)
-    for c, icon, val, lbl in zip(cols, ["💰","🔥","⚔️"], [u_dat['Points'], int(u_dat['Streak']), lvl], ["Gold", "Streak", "Level"]):
-        c.markdown(f"<div class='stat-box'><div class='stat-val'>{icon} {val:g}</div><div class='stat-lbl'>{lbl}</div></div>", unsafe_allow_html=True)
+    with st.sidebar:
+        st.markdown(f"## 🛡️ {user}")
+        st.markdown(f"**{title}** (Lvl {lvl})")
+        
+        # Stats in Sidebar
+        c1, c2 = st.columns(2)
+        c1.markdown(f"<div class='stat-box'><div class='stat-val'>💰 {u_dat['Points']:g}</div><div class='stat-lbl'>Gold</div></div>", unsafe_allow_html=True)
+        c2.markdown(f"<div class='stat-box'><div class='stat-val'>🔥 {int(u_dat['Streak'])}</div><div class='stat-lbl'>Streak</div></div>", unsafe_allow_html=True)
+        
+        st.divider()
+        
+        # Global Goal
+        cur, tgt = float(settings.get('Family_Goal_Current', 0)), float(settings.get('Family_Goal_Target', 2000))
+        prog = cur/tgt if tgt > 0 else 0
+        st.write(f"🌍 **{settings.get('Family_Goal_Title', 'Goal')}**")
+        st.progress(min(max(prog, 0.0), 1.0))
+        st.caption(f"{cur:g} / {tgt:g} Gold collected")
+        
+        st.divider()
+        if st.button("🚪 Log out"): 
+            mgr.delete("active_user")
+            st.session_state['user'] = None
+            st.rerun()
 
-    cur, tgt = float(settings.get('Family_Goal_Current', 0)), float(settings.get('Family_Goal_Target', 2000))
-    prog = cur/tgt if tgt > 0 else 0
-    st.progress(min(max(prog, 0.0), 1.0), text=f"🌍 {settings.get('Family_Goal_Title', 'Goal')} ({cur:g}/{tgt:g})")
-
+    # --- MAIN CONTENT ---
     t1, t2, t3, t4 = st.tabs(["⚔️ Quests", "🎁 Loot", "🏆 Fame", "⚙️ Admin"])
 
     with t1: # Quests
+        # --- FEATURE 2: SEARCH & FILTER ---
+        c_search, c_add = st.columns([4, 1])
+        search_q = c_search.text_input("Search Quests...", placeholder="e.g. Dishwasher", label_visibility="collapsed")
+        
+        # --- FEATURE 4: MODAL TRIGGER ---
+        if c_add.button("➕ Propose"):
+            propose_quest_modal(user)
+
         h_df = dfs['history']
         today = datetime.now().strftime("%Y-%m-%d")
         done_today_list = []
         if not h_df.empty and 'User' in h_df.columns and 'Date' in h_df.columns:
             done_today_list = h_df[(h_df['User'] == user) & (h_df['Date'].str.contains(today, na=False))]['Item'].tolist()
         
-        for idx, t in dfs['tasks'].iterrows():
-            if t.get('Status') == 'Active' and (user in t.get('Assignee', 'Any') or "Any" in t.get('Assignee', 'Any')):
-                count = done_today_list.count(t['Title'])
-                is_done = False
-                
-                if t.get('Frequency') == "Twice Daily":
-                    is_done = (count >= 2) or (datetime.now().hour < 16 and count >= 1)
-                else: 
-                    is_done = count >= 1
+        # Filter Tasks
+        tasks = dfs['tasks']
+        if search_q:
+            tasks = tasks[tasks['Title'].str.contains(search_q, case=False, na=False)]
+        
+        # --- FEATURE 3: CATEGORIZED EXPANDERS ---
+        # Define Categories
+        categories = {
+            "🌅 Daily Routines": ["Daily"],
+            "🔄 Weekly & Recurring": ["Twice Daily", "Weekly"],
+            "⚔️ Challenges & One-Time": ["One-time"]
+        }
+        
+        for cat_name, freq_list in categories.items():
+            # Filter tasks for this category
+            cat_tasks = tasks[tasks['Frequency'].isin(freq_list)]
+            if cat_tasks.empty: continue
+            
+            with st.expander(cat_name, expanded=True):
+                for idx, t in cat_tasks.iterrows():
+                    # Status Check
+                    if t.get('Status') == 'Active' and (user in t.get('Assignee', 'Any') or "Any" in t.get('Assignee', 'Any')):
+                        count = done_today_list.count(t['Title'])
+                        is_done = False
+                        if t.get('Frequency') == "Twice Daily":
+                            is_done = (count >= 2) or (datetime.now().hour < 16 and count >= 1)
+                        else: is_done = count >= 1
 
-                if not is_done:
-                    with st.container(border=True):
-                        c_txt, c_btn = st.columns([3, 1])
-                        c_txt.write(f"**{t['Title']}** ({t['Points']} pts)")
-                        
-                        st.button("Done", key=f"btn_task_{idx}", 
-                                  on_click=complete_task, 
-                                  args=(user, t, u_dat, count, settings))
-
-        with st.expander("💡 Propose Quest"):
-            with st.form("new_q"):
-                if st.form_submit_button("Submit") and (new_t := st.text_input("Title")):
-                    ws_t = get_sh().worksheet("Tasks")
-                    ws_t.append_row([int(time.time()), new_t, st.number_input("Pts", 1.0), user, "One-time", "Pending Approval"])
-                    st.success("Sent!"); time.sleep(1); st.rerun()
+                        if not is_done:
+                            with st.container(border=True):
+                                c_txt, c_btn = st.columns([3, 1])
+                                c_txt.write(f"**{t['Title']}** ({t['Points']} pts)")
+                                st.button("Done", key=f"btn_task_{idx}", 
+                                          on_click=complete_task, 
+                                          args=(user, t, u_dat, count, settings))
 
     with t2: # Loot
         st.markdown("### ❓ Mystery Box (15g)")
         if st.button("Open Box", disabled=u_dat['Points'] < 15):
             prize = random.choice([5, 10, 15, 20, 50])
-            ws = get_sh().worksheet("Users")
-            row_idx = u_dat['_row_idx']
+            ws = get_sh().worksheet("Users"); row_idx = u_dat['_row_idx']
             ws.update_cell(row_idx, 4, u_dat['Points'] - 15 + prize)
             update_history(user, "Mystery Box", f"Won {prize}", prize-15)
             st.balloons() if prize > 15 else st.info(f"Won {prize}")
             time.sleep(1); st.rerun()
 
-        for idx, r in dfs['rewards'].iterrows():
+        st.divider()
+        # Search for rewards too
+        search_r = st.text_input("Search Rewards...", placeholder="e.g. Robux", label_visibility="collapsed")
+        rewards = dfs['rewards']
+        if search_r: rewards = rewards[rewards['Title'].str.contains(search_r, case=False, na=False)]
+
+        for idx, r in rewards.iterrows():
             if r.get('Status') == 'Approved':
                 with st.container(border=True):
                     c1, c2 = st.columns([3,1])
@@ -252,9 +286,7 @@ def main():
                 c1, c2, c3 = st.columns([2,1,1])
                 c1.write(f"{t['Title']} ({t['Points']})")
                 ws_t = get_sh().worksheet("Tasks")
-                if c2.button("✅", key=f"ok_{idx}"): 
-                    ws_t.update_cell(idx + 2, 7, "Active"); st.rerun()
-                if c3.button("❌", key=f"no_{idx}"): 
-                    ws_t.update_cell(idx + 2, 7, "Rejected"); st.rerun()
+                if c2.button("✅", key=f"ok_{idx}"): ws_t.update_cell(idx + 2, 7, "Active"); st.rerun()
+                if c3.button("❌", key=f"no_{idx}"): ws_t.update_cell(idx + 2, 7, "Rejected"); st.rerun()
 
 if __name__ == "__main__": main()
