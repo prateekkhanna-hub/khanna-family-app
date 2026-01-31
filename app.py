@@ -6,16 +6,14 @@ from datetime import datetime, timedelta
 import time
 import extra_streamlit_components as stx
 import re
-import random # Added missing import
+import random
 
 # --- CONFIG ---
 SHEET_NAME = "Khanna Family App DB"
 SCOPE = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
 
 # --- BACKEND ---
-@st.cache_resource
-def get_manager():
-    return stx.CookieManager(key="auth_manager")
+# REMOVED: get_manager() function causing the warning
 
 @st.cache_resource
 def get_sh():
@@ -25,30 +23,24 @@ def get_sh():
 
 def load_data():
     sh = get_sh()
-    # Fetch all data in one go
     res = sh.values_batch_get(['Tasks!A:Z', 'Rewards!A:Z', 'History!A:Z', 'Users!A:Z', 'Settings!A:Z'])
     
     def to_df(idx):
         vals = res['valueRanges'][idx].get('values', [])
         if not vals: return pd.DataFrame()
-        # Clean headers
         cols = [re.sub(r'\s*\([A-Z]\)', '', str(h)).strip().title() for h in vals[0]]
         cols = ['XP' if c == 'Xp' else c for c in cols] 
         return pd.DataFrame(vals[1:], columns=cols)
 
     dfs = {k: to_df(i) for i, k in enumerate(['tasks', 'rewards', 'history', 'users', 'settings'])}
     
-    # Process Users Data
     if not dfs['users'].empty:
-        for req_col in ['Points', 'XP', 'Streak', 'Pin']: # Ensure Pin exists
+        for req_col in ['Points', 'XP', 'Streak', 'Pin']: 
             if req_col not in dfs['users'].columns: dfs['users'][req_col] = 0
         
-        # Numeric conversion
         num_cols = ['Points', 'XP', 'Streak']
         dfs['users'][num_cols] = dfs['users'][num_cols].apply(pd.to_numeric, errors='coerce').fillna(0)
-        
-        # Create a stable index map for faster updates later
-        dfs['users']['_row_idx'] = range(2, len(dfs['users']) + 2) # Row 1 is header
+        dfs['users']['_row_idx'] = range(2, len(dfs['users']) + 2)
         dfs['users'].set_index('Name', inplace=True, drop=False)
     
     settings = dict(zip(dfs['settings']['Setting'], dfs['settings']['Value'])) if not dfs['settings'].empty else {}
@@ -59,16 +51,13 @@ def get_level(xp):
     titles = {1:"Rookie 🌱", 2:"Scout 🔭", 3:"Adventurer 🎒", 4:"Warrior ⚔️", 5:"Knight 🛡️", 6:"Ninja 🥷", 7:"Master 🧘", 8:"Champion 🏆", 9:"Legend 👑"}
     return lvl, titles.get(lvl, "Cosmic 🌌")
 
-# --- OPTIMIZED ACTIONS ---
 def update_history(user, action_type, item, points_change):
-    # Appends to history in one API call
     ws = get_sh().worksheet("History")
     row_data = [datetime.now().strftime("%Y-%m-%d %H:%M"), user, action_type, item, points_change]
     ws.append_row(row_data)
 
 def complete_task(user, t, u_dat, done_today_count, settings):
     try:
-        # 1. Calculate Math in Python (Instant)
         mult = 1.5 if u_dat['Streak'] >= 7 else (1.2 if u_dat['Streak'] >= 3 else 1.0)
         pts = float(t['Points']) * mult
         
@@ -80,35 +69,24 @@ def complete_task(user, t, u_dat, done_today_count, settings):
             yesterday = (datetime.now()-timedelta(days=1)).strftime("%Y-%m-%d")
             new_strk = new_strk + 1 if last_active == yesterday else 1
         
-        # 2. Update User Stats (BATCH UPDATE - 1 Call instead of 4)
         ws_u = get_sh().worksheet("Users")
-        row_idx = u_dat['_row_idx'] # Retrieved from dataframe, no API search needed
+        row_idx = u_dat['_row_idx']
         
-        # Columns: Points(D), Streak(E), Last_Active(F), Role(G), XP(H)
-        # We update D, E, F, -, H (Indices 4, 5, 6, -, 8)
-        # Note: gspread uses 1-based indexing.
-        
-        # Updating Points(4), Streak(5), Last_Active(6)
         ws_u.update(range_name=f"D{row_idx}:F{row_idx}", values=[[u_dat['Points'] + pts, new_strk, today]])
-        # Updating XP(8)
         ws_u.update_cell(row_idx, 8, u_dat['XP'] + pts)
         
-        # 3. Update Global Goal
         current_global = float(settings.get('Family_Goal_Current', 0))
         ws_s = get_sh().worksheet("Settings")
-        # Assuming Family_Goal_Current is in a specific known location or we search once.
-        # For safety/simplicity in this specific function, we find it.
         try:
             cell = ws_s.find("Family_Goal_Current", in_column=1)
             ws_s.update_cell(cell.row, 2, current_global + pts)
         except: pass
 
-        # 4. History & Task Status
         update_history(user, "Quest", t['Title'], pts)
         
         if t.get('Frequency') == "One-time":
             ws_t = get_sh().worksheet("Tasks")
-            ws_t.update_cell(int(t.name) + 2, 7, "Completed") # t.name is dataframe index
+            ws_t.update_cell(int(t.name) + 2, 7, "Completed")
 
         st.toast(f"✅ Nice! Earned {pts:g} Gold!")
         time.sleep(1)
@@ -119,10 +97,7 @@ def buy_reward(user, r, u_dat):
     try:
         ws = get_sh().worksheet("Users")
         row_idx = u_dat['_row_idx']
-        
-        # Update Points only
         ws.update_cell(row_idx, 4, u_dat['Points'] - float(r['Cost']))
-        
         update_history(user, "Reward", r['Title'], -float(r['Cost']))
         st.toast(f"🎁 Redeemed: {r['Title']}")
         time.sleep(1)
@@ -133,7 +108,6 @@ def buy_reward(user, r, u_dat):
 def main():
     st.set_page_config(page_title="Khanna Family Quest", page_icon="🛡️", layout="centered")
     
-    # CSS
     st.markdown("""<style>
         div.stButton > button { width: 100%; border-radius: 8px; font-weight: bold; height: 2.5em !important; }
         .stat-box { background: #262730; border: 1px solid #464b59; border-radius: 10px; padding: 10px; text-align: center; color: white; }
@@ -144,23 +118,19 @@ def main():
     try: dfs, settings = load_data()
     except Exception as e: st.error(f"DB Error: {e}"); st.stop()
 
-    # --- AUTHENTICATION LOGIC START ---
-    mgr = get_manager()
+    # --- FIX: INITIALIZE MANAGER HERE (NOT CACHED) ---
+    mgr = stx.CookieManager(key="auth_manager")
     auth_user = mgr.get("active_user")
 
-    # 1. Try to get user from Session State
     if 'user' not in st.session_state:
         st.session_state['user'] = None
 
-    # 2. If Session is empty but Cookie exists, Auto-Login
     if st.session_state['user'] is None and auth_user:
         if auth_user in dfs['users'].index:
             st.session_state['user'] = auth_user
         else:
-            # Cookie is invalid (user deleted from DB?), clear it
             mgr.delete("active_user")
 
-    # 3. If still no user, show Login Screen
     if not st.session_state['user']:
         st.title("🛡️ Login")
         valid_users = dfs['users'].index.tolist() if not dfs['users'].empty else []
@@ -181,7 +151,6 @@ def main():
                 else:
                     st.error("Wrong PIN")
         return
-    # --- AUTHENTICATION LOGIC END ---
 
     # User Context
     user = st.session_state['user']
@@ -200,7 +169,6 @@ def main():
         c.markdown(f"<div class='stat-box'><div class='stat-val'>{icon} {val:g}</div><div class='stat-lbl'>{lbl}</div></div>", unsafe_allow_html=True)
 
     cur, tgt = float(settings.get('Family_Goal_Current', 0)), float(settings.get('Family_Goal_Target', 2000))
-    # Safety clamp for progress bar
     prog = cur/tgt if tgt > 0 else 0
     st.progress(min(max(prog, 0.0), 1.0), text=f"🌍 {settings.get('Family_Goal_Title', 'Goal')} ({cur:g}/{tgt:g})")
 
@@ -245,10 +213,7 @@ def main():
             prize = random.choice([5, 10, 15, 20, 50])
             ws = get_sh().worksheet("Users")
             row_idx = u_dat['_row_idx']
-            
-            # Batch update points
             ws.update_cell(row_idx, 4, u_dat['Points'] - 15 + prize)
-            
             update_history(user, "Mystery Box", f"Won {prize}", prize-15)
             st.balloons() if prize > 15 else st.info(f"Won {prize}")
             time.sleep(1); st.rerun()
@@ -276,7 +241,6 @@ def main():
                     xp_map['Points'] = pd.to_numeric(xp_map['Points_Change'], errors='coerce')
                     totals = xp_map.groupby('User')['Points'].sum().to_dict()
                     ws = get_sh().worksheet("Users")
-                    # Batch Update approach for Sync could be added here, but leaving as loop for simplicity as it's rarely used
                     rows = ws.get_all_values()
                     for i, r in enumerate(rows[1:], 2):
                         if r[0] in totals: ws.update_cell(i, 8, max(0, totals[r[0]]))
@@ -288,7 +252,6 @@ def main():
                 c1, c2, c3 = st.columns([2,1,1])
                 c1.write(f"{t['Title']} ({t['Points']})")
                 ws_t = get_sh().worksheet("Tasks")
-                # Using direct row updates based on dataframe index (idx + 2 for header/0-index offset)
                 if c2.button("✅", key=f"ok_{idx}"): 
                     ws_t.update_cell(idx + 2, 7, "Active"); st.rerun()
                 if c3.button("❌", key=f"no_{idx}"): 
