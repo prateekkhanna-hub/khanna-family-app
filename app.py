@@ -21,23 +21,37 @@ def get_sh():
 
 def load_data():
     sh = get_sh()
+    # Fetch all data in one go
     res = sh.values_batch_get(['Tasks!A:Z', 'Rewards!A:Z', 'History!A:Z', 'Users!A:Z', 'Settings!A:Z'])
     
     def to_df(idx):
         vals = res['valueRanges'][idx].get('values', [])
         if not vals: return pd.DataFrame()
+        
+        # 1. Clean Headers
         cols = [re.sub(r'\s*\([A-Z]\)', '', str(h)).strip().title() for h in vals[0]]
-        cols = ['XP' if c == 'Xp' else c for c in cols] 
-        return pd.DataFrame(vals[1:], columns=cols)
+        cols = ['XP' if c == 'Xp' else c for c in cols]
+        
+        # 2. Robust Row Loading (Fixes "6 columns passed" error)
+        header_len = len(cols)
+        data = []
+        for row in vals[1:]:
+            # Truncate if too long, Pad if too short
+            clean_row = row[:header_len] + [None] * (max(0, header_len - len(row)))
+            data.append(clean_row)
+            
+        return pd.DataFrame(data, columns=cols)
 
     dfs = {k: to_df(i) for i, k in enumerate(['tasks', 'rewards', 'history', 'users', 'settings'])}
     
+    # Process Users Data
     if not dfs['users'].empty:
         for req_col in ['Points', 'XP', 'Streak', 'Pin']: 
             if req_col not in dfs['users'].columns: dfs['users'][req_col] = 0
         
         num_cols = ['Points', 'XP', 'Streak']
         dfs['users'][num_cols] = dfs['users'][num_cols].apply(pd.to_numeric, errors='coerce').fillna(0)
+        # Create stable row index
         dfs['users']['_row_idx'] = range(2, len(dfs['users']) + 2)
         dfs['users'].set_index('Name', inplace=True, drop=False)
     
@@ -56,6 +70,7 @@ def update_history(user, action_type, item, points_change):
 
 def complete_task(user, t, u_dat, done_today_count, settings):
     try:
+        # 1. Calculate Rewards
         mult = 1.5 if u_dat['Streak'] >= 7 else (1.2 if u_dat['Streak'] >= 3 else 1.0)
         pts = float(t['Points']) * mult
         
@@ -63,16 +78,21 @@ def complete_task(user, t, u_dat, done_today_count, settings):
         new_strk = int(u_dat['Streak'])
         last_active = str(u_dat.get('Last_Active', ''))
         
+        # Streak Logic
         if last_active != today:
             yesterday = (datetime.now()-timedelta(days=1)).strftime("%Y-%m-%d")
             new_strk = new_strk + 1 if last_active == yesterday else 1
         
+        # 2. Batch Update User Stats
         ws_u = get_sh().worksheet("Users")
         row_idx = u_dat['_row_idx']
         
+        # Update Points, Streak, Last Active (Cols D, E, F)
         ws_u.update(range_name=f"D{row_idx}:F{row_idx}", values=[[u_dat['Points'] + pts, new_strk, today]])
+        # Update XP (Col H - Index 8)
         ws_u.update_cell(row_idx, 8, u_dat['XP'] + pts)
         
+        # 3. Update Global Goal
         current_global = float(settings.get('Family_Goal_Current', 0))
         ws_s = get_sh().worksheet("Settings")
         try:
@@ -80,8 +100,10 @@ def complete_task(user, t, u_dat, done_today_count, settings):
             ws_s.update_cell(cell.row, 2, current_global + pts)
         except: pass
 
+        # 4. Update History
         update_history(user, "Quest", t['Title'], pts)
         
+        # 5. Update Task Status (FIXED COLUMN INDEX to 6)
         if t.get('Frequency') == "One-time":
             ws_t = get_sh().worksheet("Tasks")
             ws_t.update_cell(int(t.name) + 2, 6, "Completed")
@@ -102,7 +124,7 @@ def buy_reward(user, r, u_dat):
     except Exception as e:
         st.error(f"Error: {e}")
 
-# --- NEW: POP-UP MODAL ---
+# --- POP-UP MODAL ---
 @st.dialog("💡 Propose New Quest")
 def propose_quest_modal(user):
     with st.form("new_q_modal"):
@@ -111,6 +133,7 @@ def propose_quest_modal(user):
         pts = st.number_input("Suggested Points", min_value=1.0, value=10.0)
         if st.form_submit_button("Submit Proposal"):
             ws_t = get_sh().worksheet("Tasks")
+            # Using current timestamp as ID
             ws_t.append_row([int(time.time()), new_t, pts, user, "One-time", "Pending Approval"])
             st.success("Sent for approval!")
             time.sleep(1)
@@ -118,7 +141,7 @@ def propose_quest_modal(user):
 
 # --- UI ---
 def main():
-    st.set_page_config(page_title="Khanna Family Quest", page_icon="🛡️", layout="wide") # Layout wide for better sidebar use
+    st.set_page_config(page_title="Khanna Family Quest", page_icon="🛡️", layout="wide")
     
     st.markdown("""<style>
         div.stButton > button { width: 100%; border-radius: 8px; font-weight: bold; height: 2.5em !important; }
@@ -130,15 +153,18 @@ def main():
     try: dfs, settings = load_data()
     except Exception as e: st.error(f"DB Error: {e}"); st.stop()
 
+    # --- AUTHENTICATION ---
     mgr = stx.CookieManager(key="auth_manager")
     auth_user = mgr.get("active_user")
 
     if 'user' not in st.session_state: st.session_state['user'] = None
 
+    # Auto-login via cookie
     if st.session_state['user'] is None and auth_user:
         if auth_user in dfs['users'].index: st.session_state['user'] = auth_user
         else: mgr.delete("active_user")
 
+    # Login Screen
     if not st.session_state['user']:
         st.title("🛡️ Login")
         valid_users = dfs['users'].index.tolist() if not dfs['users'].empty else []
@@ -153,7 +179,7 @@ def main():
                 else: st.error("Wrong PIN")
         return
 
-    # --- FEATURE 1: SIDEBAR COMMAND CENTER ---
+    # --- SIDEBAR (COMMAND CENTER) ---
     user = st.session_state['user']
     u_dat = dfs['users'].loc[user]
     lvl, title = get_level(u_dat['XP'])
@@ -162,14 +188,12 @@ def main():
         st.markdown(f"## 🛡️ {user}")
         st.markdown(f"**{title}** (Lvl {lvl})")
         
-        # Stats in Sidebar
         c1, c2 = st.columns(2)
         c1.markdown(f"<div class='stat-box'><div class='stat-val'>💰 {u_dat['Points']:g}</div><div class='stat-lbl'>Gold</div></div>", unsafe_allow_html=True)
         c2.markdown(f"<div class='stat-box'><div class='stat-val'>🔥 {int(u_dat['Streak'])}</div><div class='stat-lbl'>Streak</div></div>", unsafe_allow_html=True)
         
         st.divider()
         
-        # Global Goal
         cur, tgt = float(settings.get('Family_Goal_Current', 0)), float(settings.get('Family_Goal_Target', 2000))
         prog = cur/tgt if tgt > 0 else 0
         st.write(f"🌍 **{settings.get('Family_Goal_Title', 'Goal')}**")
@@ -182,15 +206,13 @@ def main():
             st.session_state['user'] = None
             st.rerun()
 
-    # --- MAIN CONTENT ---
+    # --- MAIN TABS ---
     t1, t2, t3, t4 = st.tabs(["⚔️ Quests", "🎁 Loot", "🏆 Fame", "⚙️ Admin"])
 
     with t1: # Quests
-        # --- FEATURE 2: SEARCH & FILTER ---
         c_search, c_add = st.columns([4, 1])
         search_q = c_search.text_input("Search Quests...", placeholder="e.g. Dishwasher", label_visibility="collapsed")
         
-        # --- FEATURE 4: MODAL TRIGGER ---
         if c_add.button("➕ Propose"):
             propose_quest_modal(user)
 
@@ -205,8 +227,7 @@ def main():
         if search_q:
             tasks = tasks[tasks['Title'].str.contains(search_q, case=False, na=False)]
         
-        # --- FEATURE 3: CATEGORIZED EXPANDERS ---
-        # Define Categories
+        # Categorized Display
         categories = {
             "🌅 Daily Routines": ["Daily"],
             "🔄 Weekly & Recurring": ["Twice Daily", "Weekly"],
@@ -214,13 +235,12 @@ def main():
         }
         
         for cat_name, freq_list in categories.items():
-            # Filter tasks for this category
             cat_tasks = tasks[tasks['Frequency'].isin(freq_list)]
             if cat_tasks.empty: continue
             
             with st.expander(cat_name, expanded=True):
                 for idx, t in cat_tasks.iterrows():
-                    # Status Check
+                    # Check Status & Assignee
                     if t.get('Status') == 'Active' and (user in t.get('Assignee', 'Any') or "Any" in t.get('Assignee', 'Any')):
                         count = done_today_list.count(t['Title'])
                         is_done = False
@@ -247,7 +267,6 @@ def main():
             time.sleep(1); st.rerun()
 
         st.divider()
-        # Search for rewards too
         search_r = st.text_input("Search Rewards...", placeholder="e.g. Robux", label_visibility="collapsed")
         rewards = dfs['rewards']
         if search_r: rewards = rewards[rewards['Title'].str.contains(search_r, case=False, na=False)]
@@ -286,7 +305,8 @@ def main():
                 c1, c2, c3 = st.columns([2,1,1])
                 c1.write(f"{t['Title']} ({t['Points']})")
                 ws_t = get_sh().worksheet("Tasks")
-                if c2.button("✅", key=f"ok_{idx}"): ws_t.update_cell(idx + 2, 7, "Active"); st.rerun()
-                if c3.button("❌", key=f"no_{idx}"): ws_t.update_cell(idx + 2, 7, "Rejected"); st.rerun()
+                # Correctly updates Column 6 (Status)
+                if c2.button("✅", key=f"ok_{idx}"): ws_t.update_cell(idx + 2, 6, "Active"); st.rerun()
+                if c3.button("❌", key=f"no_{idx}"): ws_t.update_cell(idx + 2, 6, "Rejected"); st.rerun()
 
 if __name__ == "__main__": main()
