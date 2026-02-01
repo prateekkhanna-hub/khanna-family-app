@@ -84,7 +84,7 @@ def complete_task(user, t, u_dat, done_today_count, settings):
         
         if t.get('Frequency') == "One-time":
             ws_t = get_sh().worksheet("Tasks")
-            ws_t.update_cell(int(t.name) + 2, 7, "Completed")
+            ws_t.update_cell(int(t.name) + 2, 6, "Completed")
 
         st.toast(f"✅ Nice! Earned {pts:g} Gold!")
         time.sleep(1)
