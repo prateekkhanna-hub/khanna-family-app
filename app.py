@@ -120,26 +120,24 @@ def buy_reward(user, r, u_dat):
     except Exception as e:
         st.error(f"Error: {e}")
 
-# --- UPDATED POP-UP MODAL (Frequency Added) ---
+# --- UPDATED POP-UP MODAL (Min Points 0.5) ---
 @st.dialog("💡 Propose New Quest")
 def propose_quest_modal(user, user_list):
     with st.form("new_q_modal"):
         st.write("Suggest a task to the Admins.")
         new_t = st.text_input("Quest Title")
-        pts = st.number_input("Suggested Points", min_value=1.0, value=10.0)
+        # CHANGED: min_value=0.5, step=0.5
+        pts = st.number_input("Suggested Points", min_value=0.5, value=10.0, step=0.5)
         
         c1, c2 = st.columns(2)
         with c1:
-            # Assignee Dropdown
             options = ["Any"] + user_list
             assignee = st.selectbox("Assign To", options)
         with c2:
-            # NEW: Frequency Dropdown
             freq = st.selectbox("Frequency", ["One-time", "Daily", "Weekly", "Twice Daily"])
         
         if st.form_submit_button("Submit Proposal"):
             ws_t = get_sh().worksheet("Tasks")
-            # Using current timestamp as ID, and using the selected Frequency
             ws_t.append_row([int(time.time()), new_t, pts, assignee, freq, "Pending Approval"])
             st.success("Sent for approval!")
             time.sleep(1)
@@ -188,7 +186,6 @@ def main():
     u_dat = dfs['users'].loc[user]
     lvl, title = get_level(u_dat['XP'])
     
-    # Check Admin Role
     is_admin = str(u_dat.get('Role', '')).strip().lower() == 'admin'
 
     with st.sidebar:
