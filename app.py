@@ -32,7 +32,7 @@ def load_data():
         cols = [re.sub(r'\s*\([A-Z]\)', '', str(h)).strip().title() for h in vals[0]]
         cols = ['XP' if c == 'Xp' else c for c in cols]
         
-        # 2. Robust Row Loading (Prevents crashes from stray columns)
+        # 2. Robust Row Loading
         header_len = len(cols)
         data = []
         for row in vals[1:]:
@@ -120,16 +120,27 @@ def buy_reward(user, r, u_dat):
     except Exception as e:
         st.error(f"Error: {e}")
 
-# --- POP-UP MODAL ---
+# --- UPDATED POP-UP MODAL (Frequency Added) ---
 @st.dialog("💡 Propose New Quest")
-def propose_quest_modal(user):
+def propose_quest_modal(user, user_list):
     with st.form("new_q_modal"):
         st.write("Suggest a task to the Admins.")
         new_t = st.text_input("Quest Title")
         pts = st.number_input("Suggested Points", min_value=1.0, value=10.0)
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            # Assignee Dropdown
+            options = ["Any"] + user_list
+            assignee = st.selectbox("Assign To", options)
+        with c2:
+            # NEW: Frequency Dropdown
+            freq = st.selectbox("Frequency", ["One-time", "Daily", "Weekly", "Twice Daily"])
+        
         if st.form_submit_button("Submit Proposal"):
             ws_t = get_sh().worksheet("Tasks")
-            ws_t.append_row([int(time.time()), new_t, pts, user, "One-time", "Pending Approval"])
+            # Using current timestamp as ID, and using the selected Frequency
+            ws_t.append_row([int(time.time()), new_t, pts, assignee, freq, "Pending Approval"])
             st.success("Sent for approval!")
             time.sleep(1)
             st.rerun()
@@ -177,7 +188,7 @@ def main():
     u_dat = dfs['users'].loc[user]
     lvl, title = get_level(u_dat['XP'])
     
-    # Check Admin Role (Used for visibility logic)
+    # Check Admin Role
     is_admin = str(u_dat.get('Role', '')).strip().lower() == 'admin'
 
     with st.sidebar:
@@ -209,7 +220,8 @@ def main():
         search_q = c_search.text_input("Search Quests...", placeholder="e.g. Dishwasher", label_visibility="collapsed")
         
         if c_add.button("➕ Propose"):
-            propose_quest_modal(user)
+            all_users = dfs['users'].index.tolist()
+            propose_quest_modal(user, all_users)
 
         h_df = dfs['history']
         today = datetime.now().strftime("%Y-%m-%d")
@@ -232,8 +244,7 @@ def main():
             
             with st.expander(cat_name, expanded=True):
                 for idx, t in cat_tasks.iterrows():
-                    # VISIBILITY LOGIC:
-                    # Show if: (Active) AND (Assigned to Me OR I am Admin OR Assigned to "Any")
+                    # VISIBILITY LOGIC
                     assignee_raw = t.get('Assignee', 'Any')
                     is_assigned_to_me = user in assignee_raw or "Any" in assignee_raw
                     
@@ -247,10 +258,9 @@ def main():
                         if not is_done:
                             with st.container(border=True):
                                 c_txt, c_btn = st.columns([3, 1])
-                                # Show who it is for if not me
                                 if is_admin and not is_assigned_to_me:
                                     c_txt.write(f"**{t['Title']}** ({t['Points']} pts)")
-                                    c_txt.caption(f"👤 Assigned to: {assignee_raw}")
+                                    c_txt.caption(f"👤 Assigned to: {assignee_raw} | {t['Frequency']}")
                                 else:
                                     c_txt.write(f"**{t['Title']}** ({t['Points']} pts)")
                                 
