@@ -32,11 +32,10 @@ def load_data():
         cols = [re.sub(r'\s*\([A-Z]\)', '', str(h)).strip().title() for h in vals[0]]
         cols = ['XP' if c == 'Xp' else c for c in cols]
         
-        # 2. Robust Row Loading (Fixes "6 columns passed" error)
+        # 2. Robust Row Loading (Prevents crashes from stray columns)
         header_len = len(cols)
         data = []
         for row in vals[1:]:
-            # Truncate if too long, Pad if too short
             clean_row = row[:header_len] + [None] * (max(0, header_len - len(row)))
             data.append(clean_row)
             
@@ -51,7 +50,6 @@ def load_data():
         
         num_cols = ['Points', 'XP', 'Streak']
         dfs['users'][num_cols] = dfs['users'][num_cols].apply(pd.to_numeric, errors='coerce').fillna(0)
-        # Create stable row index
         dfs['users']['_row_idx'] = range(2, len(dfs['users']) + 2)
         dfs['users'].set_index('Name', inplace=True, drop=False)
     
@@ -87,9 +85,7 @@ def complete_task(user, t, u_dat, done_today_count, settings):
         ws_u = get_sh().worksheet("Users")
         row_idx = u_dat['_row_idx']
         
-        # Update Points, Streak, Last Active (Cols D, E, F)
         ws_u.update(range_name=f"D{row_idx}:F{row_idx}", values=[[u_dat['Points'] + pts, new_strk, today]])
-        # Update XP (Col H - Index 8)
         ws_u.update_cell(row_idx, 8, u_dat['XP'] + pts)
         
         # 3. Update Global Goal
@@ -103,7 +99,7 @@ def complete_task(user, t, u_dat, done_today_count, settings):
         # 4. Update History
         update_history(user, "Quest", t['Title'], pts)
         
-        # 5. Update Task Status (FIXED COLUMN INDEX to 6)
+        # 5. Update Task Status
         if t.get('Frequency') == "One-time":
             ws_t = get_sh().worksheet("Tasks")
             ws_t.update_cell(int(t.name) + 2, 6, "Completed")
@@ -133,7 +129,6 @@ def propose_quest_modal(user):
         pts = st.number_input("Suggested Points", min_value=1.0, value=10.0)
         if st.form_submit_button("Submit Proposal"):
             ws_t = get_sh().worksheet("Tasks")
-            # Using current timestamp as ID
             ws_t.append_row([int(time.time()), new_t, pts, user, "One-time", "Pending Approval"])
             st.success("Sent for approval!")
             time.sleep(1)
@@ -159,12 +154,10 @@ def main():
 
     if 'user' not in st.session_state: st.session_state['user'] = None
 
-    # Auto-login via cookie
     if st.session_state['user'] is None and auth_user:
         if auth_user in dfs['users'].index: st.session_state['user'] = auth_user
         else: mgr.delete("active_user")
 
-    # Login Screen
     if not st.session_state['user']:
         st.title("🛡️ Login")
         valid_users = dfs['users'].index.tolist() if not dfs['users'].empty else []
@@ -179,10 +172,13 @@ def main():
                 else: st.error("Wrong PIN")
         return
 
-    # --- SIDEBAR (COMMAND CENTER) ---
+    # --- SIDEBAR ---
     user = st.session_state['user']
     u_dat = dfs['users'].loc[user]
     lvl, title = get_level(u_dat['XP'])
+    
+    # Check Admin Role (Used for visibility logic)
+    is_admin = str(u_dat.get('Role', '')).strip().lower() == 'admin'
 
     with st.sidebar:
         st.markdown(f"## 🛡️ {user}")
@@ -193,7 +189,6 @@ def main():
         c2.markdown(f"<div class='stat-box'><div class='stat-val'>🔥 {int(u_dat['Streak'])}</div><div class='stat-lbl'>Streak</div></div>", unsafe_allow_html=True)
         
         st.divider()
-        
         cur, tgt = float(settings.get('Family_Goal_Current', 0)), float(settings.get('Family_Goal_Target', 2000))
         prog = cur/tgt if tgt > 0 else 0
         st.write(f"🌍 **{settings.get('Family_Goal_Title', 'Goal')}**")
@@ -206,7 +201,7 @@ def main():
             st.session_state['user'] = None
             st.rerun()
 
-    # --- MAIN TABS ---
+    # --- MAIN CONTENT ---
     t1, t2, t3, t4 = st.tabs(["⚔️ Quests", "🎁 Loot", "🏆 Fame", "⚙️ Admin"])
 
     with t1: # Quests
@@ -222,12 +217,9 @@ def main():
         if not h_df.empty and 'User' in h_df.columns and 'Date' in h_df.columns:
             done_today_list = h_df[(h_df['User'] == user) & (h_df['Date'].str.contains(today, na=False))]['Item'].tolist()
         
-        # Filter Tasks
         tasks = dfs['tasks']
-        if search_q:
-            tasks = tasks[tasks['Title'].str.contains(search_q, case=False, na=False)]
+        if search_q: tasks = tasks[tasks['Title'].str.contains(search_q, case=False, na=False)]
         
-        # Categorized Display
         categories = {
             "🌅 Daily Routines": ["Daily"],
             "🔄 Weekly & Recurring": ["Twice Daily", "Weekly"],
@@ -240,8 +232,12 @@ def main():
             
             with st.expander(cat_name, expanded=True):
                 for idx, t in cat_tasks.iterrows():
-                    # Check Status & Assignee
-                    if t.get('Status') == 'Active' and (user in t.get('Assignee', 'Any') or "Any" in t.get('Assignee', 'Any')):
+                    # VISIBILITY LOGIC:
+                    # Show if: (Active) AND (Assigned to Me OR I am Admin OR Assigned to "Any")
+                    assignee_raw = t.get('Assignee', 'Any')
+                    is_assigned_to_me = user in assignee_raw or "Any" in assignee_raw
+                    
+                    if t.get('Status') == 'Active' and (is_assigned_to_me or is_admin):
                         count = done_today_list.count(t['Title'])
                         is_done = False
                         if t.get('Frequency') == "Twice Daily":
@@ -251,7 +247,13 @@ def main():
                         if not is_done:
                             with st.container(border=True):
                                 c_txt, c_btn = st.columns([3, 1])
-                                c_txt.write(f"**{t['Title']}** ({t['Points']} pts)")
+                                # Show who it is for if not me
+                                if is_admin and not is_assigned_to_me:
+                                    c_txt.write(f"**{t['Title']}** ({t['Points']} pts)")
+                                    c_txt.caption(f"👤 Assigned to: {assignee_raw}")
+                                else:
+                                    c_txt.write(f"**{t['Title']}** ({t['Points']} pts)")
+                                
                                 st.button("Done", key=f"btn_task_{idx}", 
                                           on_click=complete_task, 
                                           args=(user, t, u_dat, count, settings))
@@ -287,7 +289,7 @@ def main():
             st.info(f"**{n}** ({ti} Lvl {lv}) - {row['Points']:g} pts | 🔥 {int(row['Streak'])}")
 
     with t4: # Admin
-        if str(u_dat.get('Role', 'kid')).strip().lower() == 'admin':
+        if is_admin:
             if st.button("🔄 Sync XP"):
                 xp_map = dfs['history'].copy()
                 if not xp_map.empty:
@@ -305,7 +307,6 @@ def main():
                 c1, c2, c3 = st.columns([2,1,1])
                 c1.write(f"{t['Title']} ({t['Points']})")
                 ws_t = get_sh().worksheet("Tasks")
-                # Correctly updates Column 6 (Status)
                 if c2.button("✅", key=f"ok_{idx}"): ws_t.update_cell(idx + 2, 6, "Active"); st.rerun()
                 if c3.button("❌", key=f"no_{idx}"): ws_t.update_cell(idx + 2, 6, "Rejected"); st.rerun()
 
