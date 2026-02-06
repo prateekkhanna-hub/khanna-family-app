@@ -120,13 +120,12 @@ def buy_reward(user, r, u_dat):
     except Exception as e:
         st.error(f"Error: {e}")
 
-# --- UPDATED POP-UP MODAL (Min Points 0.5) ---
+# --- UPDATED POP-UP MODAL ---
 @st.dialog("💡 Propose New Quest")
 def propose_quest_modal(user, user_list):
     with st.form("new_q_modal"):
         st.write("Suggest a task to the Admins.")
         new_t = st.text_input("Quest Title")
-        # CHANGED: min_value=0.5, step=0.5
         pts = st.number_input("Suggested Points", min_value=0.5, value=10.0, step=0.5)
         
         c1, c2 = st.columns(2)
@@ -204,9 +203,11 @@ def main():
         st.caption(f"{cur:g} / {tgt:g} Gold collected")
         
         st.divider()
+        # --- FIXED LOGOUT LOGIC ---
         if st.button("🚪 Log out"): 
             mgr.delete("active_user")
             st.session_state['user'] = None
+            time.sleep(1) # Critical pause to allow cookie deletion
             st.rerun()
 
     # --- MAIN CONTENT ---
